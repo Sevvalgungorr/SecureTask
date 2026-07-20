@@ -1,21 +1,27 @@
 from fastapi import FastAPI
+from sqlalchemy import text
 
-app = FastAPI(
-    title="SecureTask",
-    description="OAuth2 ve OpenID Connect destekli güvenli görev yönetim sistemi",
-    version="0.1.0",
-)
+from app.database import Base, engine
+from app.models import Task
+
+app = FastAPI()
+
+Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")
-def home():
-    return {
-        "application": "SecureTask",
-        "message": "SecureTask API çalışıyor.",
-        "status": "ok",
-    }
+def root():
+    return {"message": "SecureTask API"}
 
 
 @app.get("/health")
-def health_check():
-    return {"status": "healthy"} 
+def health():
+    return {"status": "ok"}
+
+
+@app.get("/db-health")
+def database_health():
+    with engine.connect() as connection:
+        connection.execute(text("SELECT 1"))
+
+    return {"database": "connected"}
