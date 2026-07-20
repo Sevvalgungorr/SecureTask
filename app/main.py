@@ -11,7 +11,6 @@ from app.schemas import TaskCreate, TaskResponse, TaskUpdate
 
 app = FastAPI()
 
-Base.metadata.create_all(bind=engine)
 
 
 @app.get("/")
