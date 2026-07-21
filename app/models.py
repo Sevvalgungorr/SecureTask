@@ -1,6 +1,7 @@
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
@@ -19,6 +20,9 @@ class Task(Base):
     title = Column(String, nullable=False)
     description = Column(String)
     completed = Column(Boolean, default=False)
+    # low / medium / high — existing rows default to medium.
+    priority = Column(String(10), nullable=False, server_default="medium")
+    due_date = Column(Date)
     owner_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
