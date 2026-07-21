@@ -174,7 +174,29 @@ def get_current_user(
     else:
         claims = _claims_from_userinfo(token)
 
-    return _upsert_user(db, claims)
+    user = _upsert_user(db, claims)
+
+    # Roles come from the token, not the database, so they always reflect the
+    # provider's current grant. Stashed on the instance for require_role; not
+    # persisted.
+    user.roles = claims.get("roles") or []
+
+    return user
+
+
+def require_role(role: str):
+    """Dependency factory: allow only users whose token carries `role`."""
+
+    def dependency(user: User = Depends(get_current_user)) -> User:
+        if role not in getattr(user, "roles", []):
+            raise HTTPException(
+                status_code=403,
+                detail=f"This action requires the '{role}' role",
+            )
+
+        return user
+
+    return dependency
 
 
 # --- Interactive login (redirect / SSO) -----------------------------------
