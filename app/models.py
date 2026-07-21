@@ -1,4 +1,13 @@
-from sqlalchemy import Boolean, Column, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    UniqueConstraint,
+    func,
+)
 
 from app.database import Base
 
@@ -35,3 +44,27 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     oidc_issuer = Column(String(255), nullable=False, index=True)
     oidc_sub = Column(String(255), nullable=False, index=True)
+
+
+class AuditLog(Base):
+    __tablename__ = "audit_logs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Set by the database at insert time, so the log timestamp does not depend
+    # on the application clock.
+    created_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        nullable=False,
+    )
+    # Keep the log even if the user is later removed.
+    user_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="SET NULL"),
+        index=True,
+    )
+    action = Column(String(20), nullable=False)  # created / updated / deleted
+    # Not a foreign key: the referenced task may already be deleted, and the log
+    # must still record which id it was.
+    task_id = Column(Integer, index=True)
+    detail = Column(String)
