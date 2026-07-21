@@ -3,7 +3,12 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from app.auth import callback_router, get_current_user, router as auth_router
+from app.auth import (
+    callback_router,
+    get_current_user,
+    require_role,
+    router as auth_router,
+)
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import engine, get_db
 from app.models import Task, User
@@ -121,6 +126,34 @@ def delete_task(
     db: Session = Depends(get_db),
 ):
     task = _get_owned_task(task_id, user, db)
+
+    db.delete(task)
+    db.commit()
+
+    return {"message": "Task deleted"}
+
+
+# --- Admin-only: elevated access across every user's tasks -----------------
+
+
+@app.get("/admin/tasks", response_model=list[TaskResponse])
+def admin_list_tasks(
+    user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return db.query(Task).all()
+
+
+@app.delete("/admin/tasks/{task_id}")
+def admin_delete_task(
+    task_id: int,
+    user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    task = db.query(Task).filter(Task.id == task_id).first()
+
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
 
     db.delete(task)
     db.commit()
