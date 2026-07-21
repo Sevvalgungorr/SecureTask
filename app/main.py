@@ -11,8 +11,8 @@ from app.auth import (
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import engine, get_db
-from app.models import Task, User
-from app.schemas import TaskCreate, TaskResponse, TaskUpdate
+from app.models import AuditLog, Task, User
+from app.schemas import AuditLogResponse, TaskCreate, TaskResponse, TaskUpdate
 
 app = FastAPI()
 
@@ -28,6 +28,19 @@ app.add_middleware(
 
 app.include_router(auth_router)
 app.include_router(callback_router)
+
+
+def _record_audit(
+    db: Session,
+    user: User,
+    action: str,
+    task_id: int,
+    detail: str | None = None,
+) -> None:
+    db.add(
+        AuditLog(user_id=user.id, action=action, task_id=task_id, detail=detail)
+    )
+    db.commit()
 
 
 def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
@@ -80,6 +93,8 @@ def create_task(
     db.commit()
     db.refresh(new_task)
 
+    _record_audit(db, user, "created", new_task.id, new_task.title)
+
     return new_task
 
 
@@ -116,6 +131,8 @@ def update_task(
     db.commit()
     db.refresh(task)
 
+    _record_audit(db, user, "updated", task.id, task.title)
+
     return task
 
 
@@ -126,9 +143,12 @@ def delete_task(
     db: Session = Depends(get_db),
 ):
     task = _get_owned_task(task_id, user, db)
+    title = task.title
 
     db.delete(task)
     db.commit()
+
+    _record_audit(db, user, "deleted", task_id, title)
 
     return {"message": "Task deleted"}
 
@@ -155,7 +175,24 @@ def admin_delete_task(
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    title = task.title
+
     db.delete(task)
     db.commit()
 
+    _record_audit(db, user, "deleted", task_id, f"{title} (admin)")
+
     return {"message": "Task deleted"}
+
+
+@app.get("/admin/audit", response_model=list[AuditLogResponse])
+def admin_audit_log(
+    user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(AuditLog)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(100)
+        .all()
+    )
