@@ -6,6 +6,12 @@ services:
       - "8000:8000"
     environment:
       DATABASE_URL: ${DATABASE_URL}
+      OIDC_ISSUER: ${OIDC_ISSUER:-https://openidx.tdv.org}
+      OIDC_CLIENT_ID: ${OIDC_CLIENT_ID}
+      OIDC_CLIENT_SECRET: ${OIDC_CLIENT_SECRET}
+      OIDC_REDIRECT_URI: ${OIDC_REDIRECT_URI:-http://localhost:8000/auth/callback}
+      SESSION_SECRET: ${SESSION_SECRET}
+      SESSION_HTTPS_ONLY: ${SESSION_HTTPS_ONLY:-true}
     depends_on:
       - db
 
