@@ -314,7 +314,8 @@
 
     <div class="tabs hidden" id="tabs">
       <button class="tab active" data-view="my" type="button">Görevlerim</button>
-      <button class="tab" data-view="admin" type="button">Yönetim</button>
+      <button class="tab" data-view="history" type="button">Geçmişim</button>
+      <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
     </div>
 
     <div id="myView">
@@ -364,6 +365,14 @@
       <div class="empty hidden" id="emptyState">
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
         Henüz görevin yok.<br>Yukarıdan ilk görevini ekle.
+      </div>
+    </div>
+
+    <div id="historyView" class="hidden">
+      <div class="admin-block">
+        <div class="list-head"><h2>İşlem Geçmişim</h2><span class="badge">son 100</span></div>
+        <ul class="audit" id="myAuditList"></ul>
+        <div class="empty hidden" id="historyEmpty">Henüz bir işlem geçmişin yok.</div>
       </div>
     </div>
 
@@ -646,15 +655,25 @@ async function loadAdmin() {
   log.forEach(a => al.appendChild(auditRow(a)));
 }
 
+async function loadHistory() {
+  const log = await api("/audit/me");
+  const el = document.getElementById("myAuditList");
+  document.getElementById("historyEmpty").classList.toggle("hidden", log.length > 0);
+  el.innerHTML = "";
+  log.forEach(a => el.appendChild(auditRow(a)));
+}
+
+const VIEWS = { my: "myView", history: "historyView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
       document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
-      const admin = btn.dataset.view === "admin";
-      document.getElementById("myView").classList.toggle("hidden", admin);
-      document.getElementById("adminView").classList.toggle("hidden", !admin);
-      if (admin) loadAdmin().catch(() => {});
+      const v = btn.dataset.view;
+      Object.values(VIEWS).forEach(id => document.getElementById(id).classList.add("hidden"));
+      document.getElementById(VIEWS[v]).classList.remove("hidden");
+      if (v === "admin") loadAdmin().catch(() => {});
+      if (v === "history") loadHistory().catch(() => {});
     };
   });
 }
@@ -685,7 +704,9 @@ async function render() {
       '<button class="btn ghost sm" id="logoutBtn">Çıkış</button>';
     document.getElementById("logoutBtn").onclick = logout;
     document.getElementById("hello").textContent = "Merhaba, " + (me.username || "") + " 👋";
-    document.getElementById("tabs").classList.toggle("hidden", !isAdmin);
+    // Everyone gets Görevlerim + Geçmişim; the Yönetim tab is admin-only.
+    document.getElementById("tabs").classList.remove("hidden");
+    document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
     await loadTasks();
   } catch (e) { /* 401 already handled */ }
 }
