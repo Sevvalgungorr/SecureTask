@@ -168,6 +168,20 @@ def delete_task(
     return {"message": "Task deleted"}
 
 
+@app.get("/audit/me", response_model=list[AuditLogResponse])
+def my_audit_log(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return (
+        db.query(AuditLog)
+        .filter(AuditLog.user_id == user.id)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(100)
+        .all()
+    )
+
+
 # --- Admin-only: elevated access across every user's tasks -----------------
 
 
