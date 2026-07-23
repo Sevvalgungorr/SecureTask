@@ -1,5 +1,6 @@
 import base64
 import hashlib
+import json
 import secrets
 import time
 from urllib.parse import parse_qs, urlencode, urlparse
@@ -8,7 +9,7 @@ import httpx
 from authlib.jose import JsonWebToken
 from authlib.jose.errors import JoseError
 from fastapi import APIRouter, Depends, Header, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import (
@@ -319,25 +320,28 @@ def callback(request: Request, db: Session = Depends(get_db)):
     else:
         claims = _claims_from_userinfo(access_token)
 
-    user = _upsert_user(db, claims)
+    _upsert_user(db, claims)
 
-    return {
-        "access_token": access_token,
-        "token_type": token.get("token_type", "Bearer"),
-        "expires_in": token.get("expires_in"),
-        "refresh_token": token.get("refresh_token"),
-        "id_token": id_token,
-        "user": {
-            "id": user.id,
-            "username": user.username,
-            "email": user.email,
-        },
-    }
+    # Hand the token to the browser front-end: stash it and go to the app page.
+    # (json.dumps safely quotes the token for embedding in the script.)
+    handoff = (
+        '<!doctype html><meta charset="utf-8">'
+        "<script>"
+        f"localStorage.setItem('securetask_token', {json.dumps(access_token)});"
+        "location.replace('/app');"
+        "</script>Giriş yapılıyor…"
+    )
+    return HTMLResponse(handoff)
 
 
 @router.get("/me")
 def me(user: User = Depends(get_current_user)):
-    return {"id": user.id, "username": user.username, "email": user.email}
+    return {
+        "id": user.id,
+        "username": user.username,
+        "email": user.email,
+        "roles": getattr(user, "roles", []),
+    }
 
 
 @router.get("/logout")

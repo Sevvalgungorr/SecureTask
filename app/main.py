@@ -1,4 +1,7 @@
+from pathlib import Path
+
 from fastapi import Depends, FastAPI, HTTPException
+from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -58,9 +61,17 @@ def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
     return task
 
 
+_FRONTEND = Path(__file__).parent / "static" / "index.html"
+
+
 @app.get("/")
 def root():
     return {"message": "SecureTask API"}
+
+
+@app.get("/app", response_class=HTMLResponse)
+def frontend():
+    return _FRONTEND.read_text(encoding="utf-8")
 
 
 @app.get("/health")
@@ -86,6 +97,8 @@ def create_task(
         title=task.title,
         description=task.description,
         completed=task.completed,
+        priority=task.priority,
+        due_date=task.due_date,
         owner_id=user.id,
     )
 
@@ -127,6 +140,8 @@ def update_task(
     task.title = task_data.title
     task.description = task_data.description
     task.completed = task_data.completed
+    task.priority = task_data.priority
+    task.due_date = task_data.due_date
 
     db.commit()
     db.refresh(task)

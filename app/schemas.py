@@ -1,22 +1,30 @@
-from datetime import datetime
+from datetime import date, datetime
+from typing import Literal
 
 from pydantic import BaseModel
+
+Priority = Literal["low", "medium", "high"]
 
 
 class TaskCreate(BaseModel):
     title: str
     description: str | None = None
     completed: bool = False
+    priority: Priority = "medium"
+    due_date: date | None = None
 
 
 class TaskUpdate(BaseModel):
     title: str
     description: str | None = None
     completed: bool
+    priority: Priority = "medium"
+    due_date: date | None = None
 
 
 class TaskResponse(TaskCreate):
     id: int
+    owner_id: int | None = None
 
     model_config = {
         "from_attributes": True
