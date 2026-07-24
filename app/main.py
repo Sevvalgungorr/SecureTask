@@ -37,6 +37,17 @@ app.include_router(auth_router)
 app.include_router(callback_router)
 
 
+# Adds a few standard security headers to every response — a small, safe
+# hardening step that costs nothing and breaks nothing.
+@app.middleware("http")
+async def security_headers(request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
 def _record_audit(
     db: Session,
     user: User,
