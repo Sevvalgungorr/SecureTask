@@ -17,7 +17,11 @@ from app.database import engine, get_db
 from app.models import AuditLog, Task, User
 from app.schemas import AuditLogResponse, TaskCreate, TaskResponse, TaskUpdate
 
-app = FastAPI()
+app = FastAPI(
+    title="SecureTask",
+    description="OpenID Connect ile korunan, kullanıcıya özel görev yönetim API'si.",
+    version="1.0.0",
+)
 
 # Holds the PKCE code_verifier between /auth/login and /callback, and ties the
 # callback to the browser that began the login. Short-lived; cleared on logout.
