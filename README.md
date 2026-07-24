@@ -97,3 +97,7 @@ alembic/        # veritabanı migration'ları
 tests/          # pytest test paketi
 .github/workflows/ci.yml   # sürekli entegrasyon
 ```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
