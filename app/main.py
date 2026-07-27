@@ -13,7 +13,7 @@ from app.auth import (
     router as auth_router,
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
-from app.database import engine, get_db
+from app.database import SessionLocal, engine, get_db
 from app.models import AuditLog, Task, User
 from app.schemas import AuditLogResponse, TaskCreate, TaskResponse, TaskUpdate
 
@@ -45,6 +45,32 @@ async def security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    return response
+
+
+def _sanitize_log(text: str) -> str:
+    # Strip CR/LF so user-supplied values can't forge extra log lines
+    # (CWE-117 log injection) — same guard OpenIDX applies to its audit log.
+    return text.replace("\r", "").replace("\n", "")
+
+
+# Records every denied request (401 unauthenticated, 403 forbidden) to the
+# audit log — a lightweight security-event trail of who tried to reach what.
+@app.middleware("http")
+async def log_denied_access(request, call_next):
+    response = await call_next(request)
+
+    if response.status_code in (401, 403):
+        detail = _sanitize_log(
+            f"{response.status_code} {request.method} {request.url.path}"
+        )
+        db = SessionLocal()
+        try:
+            db.add(AuditLog(action="access_denied", detail=detail))
+            db.commit()
+        finally:
+            db.close()
+
     return response
 
 
