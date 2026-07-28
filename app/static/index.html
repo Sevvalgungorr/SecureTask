@@ -697,11 +697,16 @@ async function render() {
     const me = await api("/auth/me");
     const initial = (me.username || "?").trim().charAt(0).toUpperCase();
     const isAdmin = (me.roles || []).includes("admin");
+    // Static structure only — no user data in innerHTML.
     who.innerHTML =
-      '<div class="avatar">' + initial + '</div>' +
-      '<span class="name">' + me.username + '</span>' +
+      '<div class="avatar"></div>' +
+      '<span class="name"></span>' +
       (isAdmin ? '<span class="role-badge">admin</span>' : '') +
       '<button class="btn ghost sm" id="logoutBtn">Çıkış</button>';
+    // User-controlled values go in via textContent, which renders them as
+    // plain text and never executes HTML (prevents stored XSS via username).
+    who.querySelector(".avatar").textContent = initial;
+    who.querySelector(".name").textContent = me.username;
     document.getElementById("logoutBtn").onclick = logout;
     document.getElementById("hello").textContent = "Merhaba, " + (me.username || "") + " 👋";
     // Everyone gets Görevlerim + Geçmişim; the Yönetim tab is admin-only.
