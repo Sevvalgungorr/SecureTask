@@ -47,6 +47,22 @@ async def security_headers(request, call_next):
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
+    # HSTS: tarayıcıya "bu siteye hep HTTPS ile gel" der (MITM/downgrade koruması).
+    response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    # Permissions-Policy: uygulamanın hiç kullanmadığı güçlü tarayıcı
+    # yeteneklerini (konum/mikrofon/kamera) kapatır.
+    response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
+    # CSP: içeriğin nereden yüklenebileceğini kısıtlar. 'unsafe-inline' gerekli,
+    # çünkü tek dosyalık arayüz satır-içi <style>/<script> kullanıyor; ideali
+    # bunları ayrı dosyalara taşıyıp 'unsafe-inline'ı kaldırmaktır.
+    response.headers["Content-Security-Policy"] = (
+        "default-src 'self'; "
+        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; "
+        "base-uri 'self'; "
+        "form-action 'self'"
+    )
     return response
 
 
