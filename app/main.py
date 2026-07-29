@@ -1,7 +1,9 @@
+import time
+from collections import defaultdict, deque
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -46,6 +48,32 @@ async def security_headers(request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Referrer-Policy"] = "no-referrer"
     return response
+
+
+# Basit bellek-içi istek sınırlama (rate limit): her IP için pencere başına
+# en fazla _RATE_LIMIT istek — temel bir brute-force / kötüye kullanım koruması.
+_RATE_LIMIT = 60
+_RATE_WINDOW = 60
+_hits: dict[str, deque] = defaultdict(deque)
+
+
+@app.middleware("http")
+async def rate_limit(request, call_next):
+    client = request.client.host if request.client else "unknown"
+    now = time.time()
+    hits = _hits[client]
+
+    # Pencereden çıkmış (eski) istekleri unut
+    while hits and hits[0] <= now - _RATE_WINDOW:
+        hits.popleft()
+
+    if len(hits) >= _RATE_LIMIT:
+        return JSONResponse(
+            status_code=429, content={"detail": "Too many requests"}
+        )
+
+    hits.append(now)
+    return await call_next(request)
 
 
 def _sanitize_log(text: str) -> str:
