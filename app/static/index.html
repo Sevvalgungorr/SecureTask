@@ -414,6 +414,7 @@ async function api(path, options = {}) {
     },
   });
   if (res.status === 401) { logout(); throw new Error("oturum süresi doldu"); }
+  if (res.status === 429) { toast("Çok fazla istek — lütfen biraz yavaşla"); throw new Error("rate limited"); }
   if (!res.ok) throw new Error("istek başarısız (" + res.status + ")");
   return res.status === 200 ? res.json() : null;
 }
