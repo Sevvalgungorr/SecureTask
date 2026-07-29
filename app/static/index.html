@@ -280,6 +280,28 @@
     .ring, .ring svg { width: 76px; height: 76px; }
     .who .name { display: none; }
   }
+
+  /* security & account */
+  .sec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .sec-id { display: flex; align-items: center; gap: 1rem; padding: .3rem 0; }
+  .sec-av {
+    width: 56px; height: 56px; border-radius: 16px; flex: none; display: grid; place-items: center;
+    font-size: 1.4rem; font-weight: 800; color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 10px 24px -10px var(--accent);
+  }
+  .sec-name { font-weight: 700; font-size: 1.1rem; letter-spacing: -.02em; }
+  .sec-mail { color: var(--muted); font-size: .88rem; margin: .12rem 0 .5rem; }
+  .sec-roles { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .sec-kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: .55rem 1rem; align-items: baseline; }
+  .sec-kv dt { color: var(--muted); font-size: .85rem; }
+  .sec-kv dd { margin: 0; font-size: .85rem; font-weight: 600; word-break: break-all; text-align: right; }
+  .sec-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; }
+  .sec-checks li { display: flex; align-items: center; gap: .6rem; font-size: .9rem; }
+  .sec-checks .ck {
+    flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--ok-soft); color: var(--ok); font-weight: 800; font-size: .78rem;
+  }
+  @media (max-width: 620px) { .sec-grid { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
@@ -315,6 +337,7 @@
     <div class="tabs hidden" id="tabs">
       <button class="tab active" data-view="my" type="button">Görevlerim</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
+      <button class="tab" data-view="security" type="button">Güvenlik</button>
       <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
     </div>
 
@@ -373,6 +396,37 @@
         <div class="list-head"><h2>İşlem Geçmişim</h2><span class="badge">son 100</span></div>
         <ul class="audit" id="myAuditList"></ul>
         <div class="empty hidden" id="historyEmpty">Henüz bir işlem geçmişin yok.</div>
+      </div>
+    </div>
+
+    <div id="securityView" class="hidden">
+      <div class="sec-grid">
+        <div class="admin-block">
+          <div class="list-head"><h2>Kimlik</h2></div>
+          <div class="sec-id">
+            <div class="sec-av" id="secAvatar"></div>
+            <div class="sec-id-txt">
+              <div class="sec-name" id="secName"></div>
+              <div class="sec-mail" id="secMail"></div>
+              <div class="sec-roles" id="secRoles"></div>
+            </div>
+          </div>
+        </div>
+        <div class="admin-block">
+          <div class="list-head"><h2>Oturum &amp; Token</h2></div>
+          <dl class="sec-kv" id="secToken"></dl>
+        </div>
+      </div>
+      <div class="admin-block">
+        <div class="list-head"><h2>Güvenlik Durumu</h2><span class="badge">bu hesabı koruyan</span></div>
+        <ul class="sec-checks">
+          <li><span class="ck">✓</span> OpenID Connect ile kimlik doğrulama (SSO + PKCE)</li>
+          <li><span class="ck">✓</span> Rol tabanlı yetkilendirme (RBAC)</li>
+          <li><span class="ck">✓</span> İstek sınırlama — brute-force koruması (rate limiting)</li>
+          <li><span class="ck">✓</span> Denetim günlüğü + yetkisiz erişim kaydı</li>
+          <li><span class="ck">✓</span> Güvenlik başlıkları (nosniff, DENY, Referrer-Policy)</li>
+          <li><span class="ck">✓</span> XSS &amp; SQL injection koruması</li>
+        </ul>
       </div>
     </div>
 
@@ -664,7 +718,60 @@ async function loadHistory() {
   log.forEach(a => el.appendChild(auditRow(a)));
 }
 
-const VIEWS = { my: "myView", history: "historyView", admin: "adminView" };
+// Bir JWT'nin gövdesini (base64url) çözüp claim'lerini okur — sadece GÖSTERMEK
+// için, salt-okunur. İmza sunucuda doğrulanır; burada asla doğrulama yapılmaz.
+function decodeJWT(t) {
+  try {
+    let p = t.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    while (p.length % 4) p += "=";
+    const json = decodeURIComponent(
+      atob(p).split("").map(c => "%" + ("00" + c.charCodeAt(0).toString(16)).slice(-2)).join("")
+    );
+    return JSON.parse(json);
+  } catch { return {}; }
+}
+
+function fmtExpiry(exp) {
+  if (!exp) return "—";
+  const mins = Math.round((exp - Date.now() / 1000) / 60);
+  const when = new Date(exp * 1000).toLocaleString("tr-TR");
+  return mins > 0 ? `${when} (~${mins} dk kaldı)` : `${when} (süresi doldu)`;
+}
+
+async function loadSecurity() {
+  const me = await api("/auth/me");
+  const claims = decodeJWT(token());
+
+  // Kimlik
+  document.getElementById("secAvatar").textContent =
+    (me.username || "?").trim().charAt(0).toUpperCase();
+  document.getElementById("secName").textContent = me.username || "—";
+  document.getElementById("secMail").textContent = me.email || claims.email || "—";
+  const roles = (me.roles && me.roles.length) ? me.roles : ["kullanıcı"];
+  const rc = document.getElementById("secRoles");
+  rc.innerHTML = "";
+  roles.forEach(r => {
+    const s = document.createElement("span");
+    s.className = "role-badge";
+    s.textContent = r;                 // textContent → XSS'e kapalı
+    rc.appendChild(s);
+  });
+
+  // Oturum & Token (claim'lerden)
+  const kv = document.getElementById("secToken");
+  kv.innerHTML = "";
+  [
+    ["Sağlayıcı", claims.iss || "—"],
+    ["Kimlik (sub)", claims.sub || "—"],
+    ["Token geçerlilik", fmtExpiry(claims.exp)],
+  ].forEach(([k, v]) => {
+    const dt = document.createElement("dt"); dt.textContent = k;
+    const dd = document.createElement("dd"); dd.textContent = v;
+    kv.append(dt, dd);
+  });
+}
+
+const VIEWS = { my: "myView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -675,6 +782,7 @@ function setupTabs() {
       document.getElementById(VIEWS[v]).classList.remove("hidden");
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
+      if (v === "security") loadSecurity().catch(() => {});
     };
   });
 }
