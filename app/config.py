@@ -21,6 +21,10 @@ OIDC_REDIRECT_URI = os.getenv(
 )
 OIDC_SCOPE = os.getenv("OIDC_SCOPE", "openid profile email")
 
+# Where the provider sends the browser after it ends the SSO session. Must be
+# registered with the provider; leave empty to let it show its own logout page.
+OIDC_POST_LOGOUT_REDIRECT_URI = os.getenv("OIDC_POST_LOGOUT_REDIRECT_URI", "")
+
 # Expected "aud" on incoming access tokens. Defaults to the client id; override
 # when the provider issues tokens for a separate API audience.
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", OIDC_CLIENT_ID)

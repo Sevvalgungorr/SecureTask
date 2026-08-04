@@ -17,6 +17,7 @@ from app.config import (
     OIDC_CLIENT_ID,
     OIDC_CLIENT_SECRET,
     OIDC_ISSUER,
+    OIDC_POST_LOGOUT_REDIRECT_URI,
     OIDC_REDIRECT_URI,
     OIDC_SCOPE,
 )
@@ -322,6 +323,11 @@ def callback(request: Request, db: Session = Depends(get_db)):
 
     _upsert_user(db, claims)
 
+    # Keep the id_token server-side, in the signed session cookie: logout needs it
+    # as the id_token_hint, and the browser never has to hold a second credential.
+    if id_token:
+        request.session["id_token"] = id_token
+
     # Hand the token to the browser front-end: stash it and go to the app page.
     # (json.dumps safely quotes the token for embedding in the script.)
     handoff = (
@@ -346,6 +352,30 @@ def me(user: User = Depends(get_current_user)):
 
 @router.get("/logout")
 def logout(request: Request):
+    """Build the provider's RP-initiated logout URL and drop the local session.
+
+    Clearing our own token only signs the user out of this app; the provider's
+    SSO session stays open and the next login is granted silently. Sending the
+    browser to the end_session endpoint ends that session too, so signing out
+    means signing out.
+    """
+    # Read the hint before clearing: the session is where it lives.
+    id_token = request.session.get("id_token")
     request.session.clear()
 
-    return {"logout_url": f"{OIDC_ISSUER}/oauth/logout"}
+    params = {}
+
+    # Tells the provider which session to end. Without it some providers fall
+    # back to asking the user which account to sign out of.
+    if id_token:
+        params["id_token_hint"] = id_token
+
+    if OIDC_POST_LOGOUT_REDIRECT_URI:
+        params["post_logout_redirect_uri"] = OIDC_POST_LOGOUT_REDIRECT_URI
+
+    logout_url = f"{OIDC_ISSUER}/oauth/logout"
+
+    if params:
+        logout_url = f"{logout_url}?{urlencode(params)}"
+
+    return {"logout_url": logout_url}
