@@ -23,6 +23,12 @@
     --danger: #f43f5e;
     --accent-soft: #efeaff;
     --accent-ink: #ffffff;
+    /* Ordinal ramp for priority: one hue, light -> dark as priority rises.
+       Validated against the card surface (monotone lightness, >=0.06 steps,
+       light end clears 2:1 contrast). Not interchangeable with status colors. */
+    --prio-1: #a78bfa;
+    --prio-2: #7c4ded;
+    --prio-3: #4c2fb8;
     --sh-sm: 0 1px 2px rgba(24,20,48,.05);
     --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
     --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
@@ -46,6 +52,11 @@
       --danger: #fb7185;
       --accent-soft: #201a38;
       --accent-ink: #100c1c;
+      /* Re-stepped for the dark surface, not flipped: on dark, higher priority
+         reads lighter. Validated the same way against the dark card. */
+      --prio-1: #6d4bd8;
+      --prio-2: #9d7bff;
+      --prio-3: #cbb9ff;
       --sh-sm: 0 1px 2px rgba(0,0,0,.4);
       --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
       --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
@@ -235,8 +246,66 @@
   .tab { font: inherit; font-weight: 600; font-size: .88rem; cursor: pointer; border: none;
     background: transparent; color: var(--muted); padding: .42rem 1rem; border-radius: 9px; }
   .tab:hover { color: var(--ink); }
+  /* Five tabs no longer fit a phone: scroll the row rather than clip the last one. */
+  @media (max-width: 620px) {
+    .tabs { display: flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { flex: 0 0 auto; padding-inline: .8rem; }
+  }
   .tab.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 6px 16px -8px var(--accent); }
   .admin-block { margin-bottom: 1.9rem; }
+
+  /* dashboard */
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1.6rem; }
+  @media (max-width: 620px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpi {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: .85rem .95rem; box-shadow: var(--sh-sm);
+  }
+  .kpi .k-lbl {
+    display: block; font-size: .68rem; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .kpi .k-val {
+    display: block; font-size: 1.8rem; font-weight: 800; letter-spacing: -.045em;
+    line-height: 1.2; margin: .15rem 0 .1rem; font-variant-numeric: tabular-nums;
+  }
+  .kpi .k-sub { font-size: .78rem; color: var(--muted); }
+  /* Status colour, reserved: only ever means "needs attention", never a series. */
+  .kpi.alert { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+  .kpi.alert .k-val { color: var(--danger); }
+
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart .bar { fill: var(--accent); }
+  .chart .bar.danger { fill: var(--danger); }
+  .chart .hit { fill: transparent; }
+  .chart .hit:hover + .bar { filter: brightness(1.12); }
+  .chart .axis { stroke: var(--line); stroke-width: 1; }
+  .chart .tick { fill: var(--faint); font-size: 10px; font-family: inherit; }
+  .chart-tip {
+    position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0;
+    transform: translate(-50%, calc(-100% - 8px));
+    background: var(--ink); color: var(--bg); font-size: .76rem; font-weight: 600;
+    padding: .3rem .55rem; border-radius: 8px; white-space: nowrap;
+    transition: opacity .12s; z-index: 5; box-shadow: var(--sh);
+  }
+  .chart-tip.show { opacity: 1; }
+
+  /* part-to-whole: 2px surface gaps separate the segments */
+  .stack { display: flex; gap: 2px; height: 30px; border-radius: 9px; overflow: hidden; background: var(--line-2); }
+  .stack > span {
+    display: grid; place-items: center; font-size: .74rem; font-weight: 800;
+    /* Not a fixed white: on dark the ramp runs light, so the label must flip too. */
+    color: var(--accent-ink); min-width: 2px; overflow: hidden;
+  }
+  .stack .s1 { background: var(--prio-1); }
+  .stack .s2 { background: var(--prio-2); }
+  .stack .s3 { background: var(--prio-3); }
+  .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; margin-top: .75rem; font-size: .82rem; color: var(--muted); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: .4rem; vertical-align: -1px; }
+  .legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .chart-note { margin: .7rem 0 0; font-size: .8rem; color: var(--faint); }
   .badge { font-size: .72rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: .12rem .55rem; border-radius: 999px; }
 
   ul.audit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
@@ -418,13 +487,60 @@
   <section id="appView" class="hidden">
 
     <div class="tabs hidden" id="tabs">
-      <button class="tab active" data-view="my" type="button">Görevlerim</button>
+      <button class="tab active" data-view="dash" type="button">Pano</button>
+      <button class="tab" data-view="my" type="button">Görevlerim</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
       <button class="tab" data-view="security" type="button">Güvenlik</button>
       <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
     </div>
 
-    <div id="myView">
+    <div id="dashView">
+      <div class="kpis">
+        <div class="kpi">
+          <span class="k-lbl">Toplam görev</span>
+          <b class="k-val" id="kTotal">0</b>
+          <span class="k-sub" id="kTotalSub">—</span>
+        </div>
+        <div class="kpi">
+          <span class="k-lbl">Tamamlanma</span>
+          <b class="k-val" id="kRate">0%</b>
+          <span class="k-sub" id="kRateSub">—</span>
+        </div>
+        <div class="kpi">
+          <span class="k-lbl">Son 7 gün</span>
+          <b class="k-val" id="kWeek">0</b>
+          <span class="k-sub">kendi işlemin</span>
+        </div>
+        <div class="kpi" id="kOverdueCard">
+          <span class="k-lbl">Geciken</span>
+          <b class="k-val" id="kOverdue">0</b>
+          <span class="k-sub">bitiş tarihi geçmiş</span>
+        </div>
+      </div>
+
+      <div class="admin-block">
+        <div class="list-head"><h2>Aktivite</h2><span class="badge">son 14 gün</span></div>
+        <div class="chart" id="actChart"></div>
+        <p class="chart-note" id="actNote"></p>
+      </div>
+
+      <div class="admin-block">
+        <div class="list-head"><h2>Öncelik dağılımı</h2></div>
+        <div class="stack" id="prioStack"></div>
+        <div class="legend" id="prioLegend"></div>
+      </div>
+
+      <div class="admin-block hidden" id="denyBlock">
+        <div class="list-head"><h2>Reddedilen erişimler</h2><span class="badge">son 14 gün</span></div>
+        <div class="chart" id="denyChart"></div>
+        <p class="chart-note">
+          401/403 dönen istekler denetim günlüğüne <code>access_denied</code> olarak yazılır.
+          Yalnızca yöneticiler görebilir.
+        </p>
+      </div>
+    </div>
+
+    <div id="myView" class="hidden">
       <div class="summary">
         <div class="summary-text">
           <h1 class="hello" id="hello">Merhaba 👋</h1>
@@ -604,6 +720,7 @@ function taskMeta(t) {
 
 let myTasks = [];
 let filter = "all";
+let currentUser = null;
 
 function taskRow(t) {
   const li = document.createElement("li");
@@ -810,6 +927,195 @@ async function loadAdmin() {
   log.forEach(a => al.appendChild(auditRow(a)));
 }
 
+/* ── Pano ──────────────────────────────────────────────────────────────────
+   Grafikler saf SVG ile çizilir. Bunun sebebi yalnızca sadelik değil: kendi
+   eklediğimiz Content-Security-Policy başlığı dışarıdan script yüklemeyi
+   engelliyor, yani bir grafik kütüphanesi zaten yüklenemezdi. */
+
+const SVG_NS = "http://www.w3.org/2000/svg";
+
+// Yerel (UTC değil) gün anahtarı: UTC'ye çevirmek olayları bir gün kaydırabilir.
+const dayKey = d =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+
+function lastDays(n) {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Array.from({ length: n }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(today.getDate() - (n - 1 - i));
+    return d;
+  });
+}
+
+function svgEl(name, attrs = {}) {
+  const el = document.createElementNS(SVG_NS, name);
+  for (const [k, v] of Object.entries(attrs)) el.setAttribute(k, v);
+  return el;
+}
+
+// Tek serilik sütun grafiği: iş "zaman içindeki büyüklük", o yüzden tek renk —
+// ayrı renkler kimlik ima ederdi, burada ayırt edilecek bir kimlik yok.
+function columnChart(host, points, opts = {}) {
+  const W = 560, H = 148, PAD_B = 20, PAD_T = 8;
+  const plotH = H - PAD_B - PAD_T;
+  const max = Math.max(1, ...points.map(p => p.value));
+  const slot = W / points.length;
+  const bw = Math.min(24, slot * 0.6);
+
+  const svg = svgEl("svg", {
+    viewBox: `0 0 ${W} ${H}`, role: "img",
+    "aria-label": opts.aria || "",
+  });
+  svg.appendChild(svgEl("line", { x1: 0, x2: W, y1: H - PAD_B, y2: H - PAD_B, class: "axis" }));
+
+  points.forEach((p, i) => {
+    // Sıfır yükseklikli bir çubuğun üzerine gelinemez; şeffaf ve tam boy bir
+    // isabet alanı, imleç hedefini işaretten büyük tutar.
+    const hit = svgEl("rect", {
+      x: i * slot, y: PAD_T, width: slot, height: plotH, class: "hit",
+    });
+    const title = svgEl("title");
+    title.textContent = p.label;
+    hit.appendChild(title);
+    hit.addEventListener("mouseenter", () => showTip(host, i * slot + slot / 2, W, p.label));
+    hit.addEventListener("mouseleave", () => hideTip(host));
+    svg.appendChild(hit);
+
+    const h = p.value === 0 ? 0 : Math.max(3, (p.value / max) * plotH);
+    svg.appendChild(svgEl("rect", {
+      x: i * slot + (slot - bw) / 2, y: H - PAD_B - h,
+      width: bw, height: h, rx: 4,
+      class: "bar" + (opts.tone ? " " + opts.tone : ""),
+    }));
+
+    if (p.tick) {
+      const t = svgEl("text", {
+        x: i * slot + slot / 2, y: H - PAD_B + 14,
+        "text-anchor": "middle", class: "tick",
+      });
+      t.textContent = p.tick;
+      svg.appendChild(t);
+    }
+  });
+
+  host.innerHTML = "";
+  host.appendChild(svg);
+  const tip = document.createElement("div");
+  tip.className = "chart-tip";
+  host.appendChild(tip);
+}
+
+function showTip(host, xInViewBox, viewBoxW, text) {
+  const tip = host.querySelector(".chart-tip");
+  if (!tip) return;
+  tip.textContent = text;
+  tip.style.left = (xInViewBox / viewBoxW) * host.clientWidth + "px";
+  tip.style.top = "0px";
+  tip.classList.add("show");
+}
+
+function hideTip(host) {
+  const tip = host.querySelector(".chart-tip");
+  if (tip) tip.classList.remove("show");
+}
+
+function dailyCounts(entries, days) {
+  const counts = new Map(days.map(d => [dayKey(d), 0]));
+  entries.forEach(e => {
+    const k = dayKey(new Date(e.created_at));
+    if (counts.has(k)) counts.set(k, counts.get(k) + 1);
+  });
+  return days.map((d, i) => ({
+    value: counts.get(dayKey(d)),
+    label: `${d.toLocaleDateString("tr-TR", { day: "numeric", month: "long" })} — ${counts.get(dayKey(d))} işlem`,
+    // Her sütuna etiket koymak okunmaz olurdu; iki günde bir yeter.
+    tick: i % 2 === 0 ? d.getDate() : "",
+  }));
+}
+
+function renderPriority(tasks) {
+  const order = [
+    { key: "high", cls: "s3", label: "Yüksek" },
+    { key: "medium", cls: "s2", label: "Orta" },
+    { key: "low", cls: "s1", label: "Düşük" },
+  ];
+  const total = tasks.length;
+  const stack = document.getElementById("prioStack");
+  const legend = document.getElementById("prioLegend");
+  stack.innerHTML = "";
+  legend.innerHTML = "";
+
+  order.forEach(o => {
+    const n = tasks.filter(t => (t.priority || "medium") === o.key).length;
+    const seg = document.createElement("span");
+    seg.className = o.cls;
+    seg.style.flex = total ? n : 0;
+    // Doğrudan etiket, ancak sığdığında: dar bir dilimde rakam okunmaz.
+    seg.textContent = total && n / total > 0.12 ? n : "";
+    seg.title = `${o.label}: ${n}`;
+    stack.appendChild(seg);
+
+    const item = document.createElement("span");
+    const swatch = document.createElement("i");
+    // Kimlik rengi işarette durur; sayı ve etiket metin renginde kalır.
+    swatch.style.background = `var(--prio-${o.cls.slice(1)})`;
+    item.appendChild(swatch);
+    item.appendChild(document.createTextNode(o.label + " "));
+    const b = document.createElement("b");
+    b.textContent = n;
+    item.appendChild(b);
+    legend.appendChild(item);
+  });
+}
+
+async function loadDash() {
+  const tasks = myTasks;
+  const done = tasks.filter(t => t.completed).length;
+  const total = tasks.length;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const overdue = tasks.filter(
+    t => !t.completed && t.due_date && new Date(t.due_date) < today
+  ).length;
+
+  document.getElementById("kTotal").textContent = total;
+  document.getElementById("kTotalSub").textContent = `${done} tamamlandı · ${total - done} bekliyor`;
+  document.getElementById("kRate").textContent = (total ? Math.round((done / total) * 100) : 0) + "%";
+  document.getElementById("kRateSub").textContent = total ? `${done}/${total} görev` : "henüz görev yok";
+  document.getElementById("kOverdue").textContent = overdue;
+  document.getElementById("kOverdueCard").classList.toggle("alert", overdue > 0);
+
+  renderPriority(tasks);
+
+  const days = lastDays(14);
+  const log = await api("/audit/me");
+  const points = dailyCounts(log, days);
+  columnChart(document.getElementById("actChart"), points, {
+    aria: "Son 14 günün günlük işlem sayısı",
+  });
+
+  const week = points.slice(-7).reduce((s, p) => s + p.value, 0);
+  document.getElementById("kWeek").textContent = week;
+  const busiest = points.reduce((a, b) => (b.value > a.value ? b : a), points[0]);
+  document.getElementById("actNote").textContent = busiest && busiest.value
+    ? `En yoğun gün: ${busiest.label}.`
+    : "Bu dönemde kayıtlı işlem yok.";
+
+  // Reddedilen erişimler sistem geneli bir veri ve kullanıcıya bağlanmadan
+  // yazılıyor, o yüzden yalnızca /admin/audit üzerinden ve yalnızca yöneticiye.
+  const isAdmin = (currentUser?.roles || []).includes("admin");
+  document.getElementById("denyBlock").classList.toggle("hidden", !isAdmin);
+  if (isAdmin) {
+    const all = await api("/admin/audit");
+    const denied = all.filter(a => a.action === "access_denied");
+    columnChart(document.getElementById("denyChart"), dailyCounts(denied, days), {
+      tone: "danger",
+      aria: "Son 14 günde reddedilen erişim denemeleri",
+    });
+  }
+}
+
 async function loadHistory() {
   const log = await api("/audit/me");
   const el = document.getElementById("myAuditList");
@@ -871,7 +1177,7 @@ async function loadSecurity() {
   });
 }
 
-const VIEWS = { my: "myView", history: "historyView", security: "securityView", admin: "adminView" };
+const VIEWS = { dash: "dashView", my: "myView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -880,6 +1186,8 @@ function setupTabs() {
       const v = btn.dataset.view;
       Object.values(VIEWS).forEach(id => document.getElementById(id).classList.add("hidden"));
       document.getElementById(VIEWS[v]).classList.remove("hidden");
+      // Pano görev listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
+      if (v === "dash") loadTasks().then(loadDash).catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
       if (v === "security") loadSecurity().catch(() => {});
@@ -916,6 +1224,7 @@ async function render() {
 
   try {
     const me = await api("/auth/me");
+    currentUser = me;
     const initial = (me.username || "?").trim().charAt(0).toUpperCase();
     const isAdmin = (me.roles || []).includes("admin");
     // User-controlled values go in via textContent, which renders them as
@@ -928,6 +1237,7 @@ async function render() {
     document.getElementById("tabs").classList.remove("hidden");
     document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
     await loadTasks();
+    await loadDash();
   } catch (e) {
     // A 401 already signed us out inside api(); anything else leaves us signed
     // in but unable to load the profile, which the user deserves to be told.

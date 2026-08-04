@@ -12,9 +12,15 @@ OpenID Connect ile korunan, kullanıcıya özel bir görev yönetim uygulaması.
 - 👤 **Kullanıcıya özel görevler** — herkes yalnızca kendi görevlerine erişir
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü (audit log)** — kim, ne zaman, ne yaptı; kullanıcı kendi geçmişini de görebilir
+- 📊 **Pano** — tamamlanma, aktivite ve öncelik dağılımı grafikleri; yöneticiye ayrıca reddedilen erişim denemeleri
 - 🎯 **Öncelik ve bitiş tarihi** — görevlerde renkli etiket ve tarih
 - 🖥️ **Web arayüzü** — giriş, görev yönetimi, filtreler, admin paneli
 - ✅ **Otomatik testler** — pytest ile 10 test, CI üzerinde her değişiklikte çalışır
+
+![Pano](docs/images/dashboard.png)
+
+Grafikler dış bir kütüphane kullanmaz, saf SVG ile çizilir — uygulamanın kendi
+Content-Security-Policy başlığı zaten dışarıdan script yüklenmesine izin vermez.
 
 ## Teknolojiler
 
