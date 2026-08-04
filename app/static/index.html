@@ -467,13 +467,30 @@ async function api(path, options = {}) {
       ...(options.headers || {}),
     },
   });
-  if (res.status === 401) { logout(); throw new Error("oturum süresi doldu"); }
+  if (res.status === 401) { clearSession(); throw new Error("oturum süresi doldu"); }
   if (res.status === 429) { toast("Çok fazla istek — lütfen biraz yavaşla"); throw new Error("rate limited"); }
   if (!res.ok) throw new Error("istek başarısız (" + res.status + ")");
   return res.status === 200 ? res.json() : null;
 }
 
-function logout() { localStorage.removeItem(KEY); render(); }
+// Local sign-out: forget our token and fall back to the login screen. Used when
+// a token simply expired — no reason to disturb the provider's SSO session.
+function clearSession() { localStorage.removeItem(KEY); render(); }
+
+// Full sign-out (the Çıkış button): also end the provider's SSO session, so the
+// next login really asks for credentials instead of silently reusing the old one.
+async function logout() {
+  let url = null;
+  try {
+    // Plain fetch, not api(): api() calls clearSession() on a 401, and routing
+    // sign-out through it would fight with the redirect we are about to make.
+    const res = await fetch("/auth/logout");
+    if (res.ok) url = (await res.json()).logout_url;
+  } catch (e) { /* provider unreachable — the local sign-out below still stands */ }
+  // Drop our token first, so a failed redirect can never leave the user signed in.
+  localStorage.removeItem(KEY);
+  if (url) location.href = url; else render();
+}
 
 const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
@@ -802,27 +819,37 @@ async function render() {
 
   loginView.classList.add("hidden");
   appView.classList.remove("hidden");
+
+  // Draw the header before /auth/me is awaited. If that call fails with anything
+  // other than a 401 (server down, database down) the user must still have a
+  // Çıkış button to leave with, instead of being stranded in a blank session.
+  // Static structure only — no user data in innerHTML.
+  who.innerHTML =
+    '<div class="avatar"></div>' +
+    '<span class="name"></span>' +
+    '<span class="role-badge hidden">admin</span>' +
+    '<button class="btn ghost sm" id="logoutBtn">Çıkış</button>';
+  document.getElementById("logoutBtn").onclick = logout;
+
   try {
     const me = await api("/auth/me");
     const initial = (me.username || "?").trim().charAt(0).toUpperCase();
     const isAdmin = (me.roles || []).includes("admin");
-    // Static structure only — no user data in innerHTML.
-    who.innerHTML =
-      '<div class="avatar"></div>' +
-      '<span class="name"></span>' +
-      (isAdmin ? '<span class="role-badge">admin</span>' : '') +
-      '<button class="btn ghost sm" id="logoutBtn">Çıkış</button>';
     // User-controlled values go in via textContent, which renders them as
     // plain text and never executes HTML (prevents stored XSS via username).
     who.querySelector(".avatar").textContent = initial;
     who.querySelector(".name").textContent = me.username;
-    document.getElementById("logoutBtn").onclick = logout;
+    who.querySelector(".role-badge").classList.toggle("hidden", !isAdmin);
     document.getElementById("hello").textContent = "Merhaba, " + (me.username || "") + " 👋";
     // Everyone gets Görevlerim + Geçmişim; the Yönetim tab is admin-only.
     document.getElementById("tabs").classList.remove("hidden");
     document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
     await loadTasks();
-  } catch (e) { /* 401 already handled */ }
+  } catch (e) {
+    // A 401 already signed us out inside api(); anything else leaves us signed
+    // in but unable to load the profile, which the user deserves to be told.
+    if (token()) toast("Profil yüklenemedi — sunucuya ulaşılamıyor");
+  }
 }
 
 render();
