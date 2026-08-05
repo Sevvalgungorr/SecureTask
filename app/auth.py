@@ -17,9 +17,12 @@ from app.config import (
     OIDC_CLIENT_ID,
     OIDC_CLIENT_SECRET,
     OIDC_ISSUER,
+    OIDC_MFA_ACR,
+    OIDC_MFA_AMR,
     OIDC_POST_LOGOUT_REDIRECT_URI,
     OIDC_REDIRECT_URI,
     OIDC_SCOPE,
+    STEP_UP_REQUIRED,
 )
 from app.database import get_db
 from app.models import User
@@ -183,7 +186,46 @@ def get_current_user(
     # persisted.
     user.roles = claims.get("roles") or []
 
+    # How this session authenticated, for step-up decisions. Same reasoning as
+    # roles: it describes the token, so it is read from the token every time
+    # rather than remembered against the user row.
+    amr = claims.get("amr")
+    user.amr = amr if isinstance(amr, list) else ([amr] if amr else [])
+    user.acr = claims.get("acr")
+
     return user
+
+
+def has_mfa(user: User) -> bool:
+    """Whether the token says this session cleared a second factor."""
+    amr = {str(m).lower() for m in getattr(user, "amr", []) or []}
+    acr = getattr(user, "acr", None)
+
+    if amr & OIDC_MFA_AMR:
+        return True
+
+    return bool(acr) and str(acr).lower() in OIDC_MFA_ACR
+
+
+def require_step_up(user: User) -> None:
+    """Guard the actions that decide to live with a risk.
+
+    Deliberately fail-closed: a token that carries no `amr`/`acr` is treated as
+    single-factor. If the provider does not emit either claim the action stays
+    blocked, which is the safe way to be wrong — and the operator can set
+    OIDC_MFA_AMR/OIDC_MFA_ACR to the values it does emit, or turn the check off
+    with STEP_UP_REQUIRED=false, both of which are explicit choices.
+    """
+    if not STEP_UP_REQUIRED or has_mfa(user):
+        return
+
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Bir riski kabul etmek çok faktörlü doğrulama gerektirir. "
+            "Çıkış yapıp MFA ile yeniden giriş yapın."
+        ),
+    )
 
 
 def require_role(role: str):
@@ -347,6 +389,12 @@ def me(user: User = Depends(get_current_user)):
         "username": user.username,
         "email": user.email,
         "roles": getattr(user, "roles", []),
+        # Surfaced so the interface can say up front whether this session may
+        # accept a risk, instead of only finding out when the action is refused.
+        "amr": getattr(user, "amr", []),
+        "acr": getattr(user, "acr", None),
+        "mfa": has_mfa(user),
+        "step_up_required": STEP_UP_REQUIRED,
     }
 
 

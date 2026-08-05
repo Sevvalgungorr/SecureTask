@@ -12,12 +12,14 @@ from starlette.middleware.sessions import SessionMiddleware
 from app.auth import (
     callback_router,
     get_current_user,
+    has_mfa,
     require_role,
+    require_step_up,
     router as auth_router,
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
-from app.models import SLA_DAYS, AuditLog, Finding, User
+from app.models import ACCEPTED_RISK, SLA_DAYS, AuditLog, Finding, User
 from app.schemas import (
     AuditLogResponse,
     FindingCreate,
@@ -165,7 +167,7 @@ def _sla_due_date(severity: str) -> date:
     return date.today() + timedelta(days=SLA_DAYS[severity])
 
 
-def _describe_changes(finding: Finding, new: FindingUpdate) -> str:
+def _describe_changes(finding: Finding, new: FindingUpdate, user: User) -> str:
     """Summarise an edit for the audit log.
 
     Severity and status are spelled out because those two carry the risk
@@ -180,6 +182,11 @@ def _describe_changes(finding: Finding, new: FindingUpdate) -> str:
         )
         if before != after
     ]
+
+    # Record that the second factor was actually presented, not just that the
+    # risk was accepted — otherwise the log cannot show the guard held.
+    if new.status == ACCEPTED_RISK and finding.status != ACCEPTED_RISK and has_mfa(user):
+        changes.append("mfa doğrulandı")
 
     return " · ".join([new.title, *changes])
 
@@ -216,6 +223,11 @@ def create_finding(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
+    # Filing a finding as already-accepted is the same decision as accepting one
+    # later, so it meets the same bar.
+    if finding.status == ACCEPTED_RISK:
+        require_step_up(user)
+
     new_finding = Finding(
         title=finding.title,
         description=finding.description,
@@ -267,8 +279,14 @@ def update_finding(
 ):
     finding = _get_owned_finding(finding_id, user, db)
 
+    # Only the transition is guarded. A finding that is already accepted can
+    # still be retitled or re-described without a second factor; what needs one
+    # is the decision to carry the risk.
+    if finding_data.status == ACCEPTED_RISK and finding.status != ACCEPTED_RISK:
+        require_step_up(user)
+
     # Read the change summary before the row is overwritten.
-    detail = _describe_changes(finding, finding_data)
+    detail = _describe_changes(finding, finding_data, user)
 
     finding.title = finding_data.title
     finding.description = finding_data.description

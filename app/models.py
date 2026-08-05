@@ -18,7 +18,8 @@ SLA_DAYS = {"critical": 7, "high": 14, "medium": 30, "low": 90}
 
 # Both close a finding, but not the same way: one removes the problem, the
 # other keeps it and records that someone decided to live with it.
-CLOSED_STATUSES = ("fixed", "accepted_risk")
+ACCEPTED_RISK = "accepted_risk"
+CLOSED_STATUSES = ("fixed", ACCEPTED_RISK)
 
 
 class Finding(Base):

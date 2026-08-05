@@ -29,6 +29,35 @@ OIDC_POST_LOGOUT_REDIRECT_URI = os.getenv("OIDC_POST_LOGOUT_REDIRECT_URI", "")
 # when the provider issues tokens for a separate API audience.
 OIDC_AUDIENCE = os.getenv("OIDC_AUDIENCE", OIDC_CLIENT_ID)
 
+
+
+def _csv(name: str, default: str) -> frozenset[str]:
+    return frozenset(
+        part.strip().lower() for part in os.getenv(name, default).split(",") if part.strip()
+    )
+
+
+# --- Step-up authentication -----------------------------------------------
+#
+# Accepting a risk means a finding stays open forever by decision. That is the
+# one action here that cannot be undone by fixing something later, so it asks
+# for a second factor rather than trusting whatever session is already open.
+#
+# Which values prove a second factor is provider-specific: OIDC defines the
+# `amr` (methods used) and `acr` (context class) claims but not their contents.
+# These lists must be checked against what the provider actually issues.
+STEP_UP_REQUIRED = os.getenv("STEP_UP_REQUIRED", "true").lower() != "false"
+
+# `pwd` is deliberately absent: a password is the first factor, not a second.
+OIDC_MFA_AMR = _csv(
+    "OIDC_MFA_AMR",
+    "mfa,otp,push,mfa_push,totp,sms,hwk,swk,webauthn,fido,u2f",
+)
+
+# Empty by default: an acr value only means "step-up" if the provider says so,
+# and guessing one would silently weaken the check.
+OIDC_MFA_ACR = _csv("OIDC_MFA_ACR", "")
+
 # Signs the short-lived session cookie that carries the PKCE code_verifier
 # between /auth/login and /callback.
 SESSION_SECRET = _required("SESSION_SECRET")

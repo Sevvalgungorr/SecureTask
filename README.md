@@ -19,6 +19,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Başkasının bulgu envanterini okuma (IDOR) | Her sorgu `owner_id` ile sınırlı; sahibi olmayan kayıt **404** döner, 403 değil | `test_findings.py::test_findings_are_isolated_per_user` |
 | Yetkisiz yönetim erişimi | `require_role("admin")` ile korunan `/admin/*` uçları | `test_findings.py::test_admin_sees_all_findings_others_forbidden` |
 | Riskin sessizce yok edilmesi (kritikliği düşürme, "risk kabul" ile kapatma) | Denetim günlüğü değişikliği açıkça yazar: `severity critical→low`, `status open→accepted_risk` | `test_audit.py::test_severity_and_status_changes_are_spelled_out` |
+| Ele geçirilmiş bir oturumun riski kabul edip kapatması | **Step-up MFA**: `accepted_risk`'e geçiş, token'daki `amr`/`acr` ile ikinci faktör kanıtlanmadıkça reddedilir (fail-closed) | `test_step_up.py` (8 test) |
 | İz silme / kaydın kaybolması | Denetim kaydı bulgudan bağımsız yaşar (FK değil), bulgu silinse bile kalır | `test_audit.py::test_audit_survives_finding_deletion` |
 | Kaba kuvvet ve kötüye kullanım | IP başına istek sınırı (rate limit), 429 | Arayüzde uyarı, manuel test |
 | Yetkisiz erişim denemesinin görünmezliği | 401/403 dönen her istek `access_denied` olarak günlüğe yazılır | Panodaki "Reddedilen erişimler" grafiği |
@@ -31,6 +32,23 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 bilinen bir açık: token JWKS ile *yerel* doğrulandığı için, sağlayıcıda oturum
 iptal edilse bile token süresi dolana kadar geçerli kalır.
 
+### Step-up doğrulama nasıl çalışır
+
+Bir bulgunun durumu `accepted_risk`'e geçerken — yeni kayıtta da, güncellemede de —
+token'ın ikinci bir faktör taşıdığı doğrulanır: `amr` claim'i `OIDC_MFA_AMR`
+listesinden bir değer içermeli (parolayı ifade eden `pwd` bilinçli olarak listede
+değildir), ya da `acr` claim'i `OIDC_MFA_ACR` ile eşleşmeli.
+
+Kontrol **fail-closed**: hiçbir claim yoksa oturum tek faktörlü sayılır ve işlem
+reddedilir. Sağlayıcının hangi değerleri ürettiği standartlaşmamıştır, bu yüzden
+her ikisi de ortam değişkeniyle ayarlanır; **Güvenlik** sekmesi oturumun `amr`
+değerini gösterir, böylece doğru değerler gerçek bir token'dan okunabilir.
+
+Yalnızca *geçiş* korunur: zaten kabul edilmiş bir bulgunun başlığı ikinci faktör
+olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
+`mfa doğrulandı` olarak yazılır; reddedilen deneme ise 403 olduğu için
+`access_denied` kaydına düşer ve panodaki grafikte görünür.
+
 ## Özellikler
 
 - 🔐 **OpenID Connect / SSO girişi** — parola yalnızca kimlik sağlayıcıya girilir, uygulama görmez (PKCE korumalı)
@@ -38,11 +56,12 @@ iptal edilse bile token süresi dolana kadar geçerli kalır.
 - 🔎 **Bulgu kaydı** — başlık, kanıt, **varlık**, kritiklik, durum
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
+- 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
 - 👤 **Kullanıcıya özel envanter** — herkes yalnızca kendi bulgularına erişir
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 16 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 24 test, CI üzerinde her değişiklikte çalışır
 
 ![Pano](docs/images/dashboard.png)
 
@@ -151,7 +170,6 @@ tests/          # pytest test paketi
 ## Sıradaki işler
 
 - **Token iptali kontrolü (introspection)** — sağlayıcıda oturum kapatılınca token'ın burada da geçersiz olması
-- **Step-up authentication** — kritik bir bulguyu "risk kabul" ile kapatmak için MFA şartı (`acr`/`amr` claim'i)
 - **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz)
 - **Denetim günlüğü bütünlüğü** — hash zinciri: kayıt değiştirilirse zincir kırılır
 
