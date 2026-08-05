@@ -50,7 +50,7 @@ def db():
         session.close()
 
 
-def _make_user(db, username, roles):
+def _make_user(db, username, roles, amr, acr):
     user = User(
         username=username,
         email=f"{username}@example.test",
@@ -60,7 +60,11 @@ def _make_user(db, username, roles):
     db.add(user)
     db.commit()
     db.refresh(user)
-    user.roles = roles  # transient, as get_current_user would attach
+    # Transient, exactly as get_current_user attaches them from the token: the
+    # default is a password-only session, so step-up guards are exercised.
+    user.roles = roles
+    user.amr = amr
+    user.acr = acr
     return user
 
 
@@ -71,8 +75,8 @@ def client(db):
     app.dependency_overrides[get_db] = lambda: db
     test_client = TestClient(app)
 
-    def login_as(username="alice", roles=None):
-        user = _make_user(db, username, roles or [])
+    def login_as(username="alice", roles=None, amr=None, acr=None):
+        user = _make_user(db, username, roles or [], amr or ["pwd"], acr)
         app.dependency_overrides[get_current_user] = lambda: user
         return user
 

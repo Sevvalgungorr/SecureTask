@@ -650,6 +650,7 @@
           <li><span class="ck">✓</span> İstek sınırlama — brute-force koruması (rate limiting)</li>
           <li><span class="ck">✓</span> Denetim günlüğü + yetkisiz erişim kaydı</li>
           <li><span class="ck">✓</span> Kritiklik düşürme ve risk kabulü ayrıca kayda geçer</li>
+          <li><span class="ck">✓</span> Risk kabulü için adım-adım doğrulama (step-up MFA)</li>
           <li><span class="ck">✓</span> Güvenlik başlıkları (nosniff, DENY, Referrer-Policy)</li>
           <li><span class="ck">✓</span> XSS &amp; SQL injection koruması</li>
         </ul>
@@ -695,7 +696,15 @@ async function api(path, options = {}) {
   });
   if (res.status === 401) { clearSession(); throw new Error("oturum süresi doldu"); }
   if (res.status === 429) { toast("Çok fazla istek — lütfen biraz yavaşla"); throw new Error("rate limited"); }
-  if (!res.ok) throw new Error("istek başarısız (" + res.status + ")");
+  if (!res.ok) {
+    // Sunucunun gerekçesini taşı: bir 403 "yasak" demekle kalmamalı, neden
+    // reddedildiğini de söylemeli (ör. adım-adım MFA gerekiyor).
+    let detail = "";
+    try { detail = (await res.json()).detail || ""; } catch (e) { /* gövde JSON değil */ }
+    const err = new Error(detail || "istek başarısız (" + res.status + ")");
+    err.status = res.status;
+    throw err;
+  }
   return res.status === 200 ? res.json() : null;
 }
 
@@ -765,16 +774,27 @@ function stateSelect(f, after) {
   const sel = document.createElement("select");
   sel.className = "state-select";
   sel.title = "Durum";
+  // Bu oturum MFA'dan geçmediyse risk kabulünün reddedileceğini önceden söyle;
+  // kullanıcı denemeden önce bilsin. Seçenek yine de gizlenmiyor — sunucu tek
+  // yetkili, arayüz yalnızca haber veriyor.
+  const needsStepUp = currentUser && currentUser.step_up_required && !currentUser.mfa;
   Object.entries(STATUS_LABEL).forEach(([value, label]) => {
     const opt = document.createElement("option");
     opt.value = value;
-    opt.textContent = label;
+    opt.textContent = value === "accepted_risk" && needsStepUp
+      ? label + " (MFA gerekir)"
+      : label;
     if (f.status === value) opt.selected = true;
     sel.appendChild(opt);
   });
   sel.onchange = async () => {
-    await saveFinding({ ...f, status: sel.value });
-    toast("Durum: " + STATUS_LABEL[sel.value]);
+    try {
+      await saveFinding({ ...f, status: sel.value });
+      toast("Durum: " + STATUS_LABEL[sel.value]);
+    } catch (e) {
+      // Reddedilirse listeyi tazelemek seçimi eski durumuna geri alır.
+      toast(e.message);
+    }
     after();
   };
   return sel;
@@ -1246,10 +1266,15 @@ async function loadSecurity() {
   // Oturum & Token (claim'lerden)
   const kv = document.getElementById("secToken");
   kv.innerHTML = "";
+  // amr/acr sunucudan gelir — token'ı burada çözmek yalnızca gösterim içindir,
+  // yetki kararı her zaman sunucuda verilir.
+  const amr = (me.amr || []).join(", ");
   [
     ["Sağlayıcı", claims.iss || "—"],
     ["Kimlik (sub)", claims.sub || "—"],
     ["Token geçerlilik", fmtExpiry(claims.exp)],
+    ["Doğrulama yöntemi", amr || "sağlayıcı bildirmedi"],
+    ["Bu oturum", me.mfa ? "MFA ile doğrulandı ✓" : "yalnızca parola — risk kabulü yapılamaz"],
   ].forEach(([k, v]) => {
     const dt = document.createElement("dt"); dt.textContent = k;
     const dd = document.createElement("dd"); dd.textContent = v;

@@ -29,7 +29,9 @@ def test_actions_are_recorded_in_audit(client):
 
 def test_severity_and_status_changes_are_spelled_out(client):
     """Downgrading a finding or accepting its risk must be readable in the log."""
-    client.login_as("admin", roles=["admin"])
+    # Accepting a risk needs a second factor (see test_step_up.py); this test is
+    # about what the log says afterwards, so it starts from an MFA session.
+    client.login_as("admin", roles=["admin"], amr=["pwd", "otp"])
 
     finding_id = client.post(
         "/findings", json={"title": "Track me", "severity": "critical"}
