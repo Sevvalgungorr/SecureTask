@@ -1,5 +1,6 @@
 import time
 from collections import defaultdict, deque
+from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
@@ -16,13 +17,21 @@ from app.auth import (
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
-from app.models import AuditLog, Task, User
-from app.schemas import AuditLogResponse, TaskCreate, TaskResponse, TaskUpdate
+from app.models import SLA_DAYS, AuditLog, Finding, User
+from app.schemas import (
+    AuditLogResponse,
+    FindingCreate,
+    FindingResponse,
+    FindingUpdate,
+)
 
 app = FastAPI(
     title="SecureTask",
-    description="OpenID Connect ile korunan, kullanıcıya özel görev yönetim API'si.",
-    version="1.0.0",
+    description=(
+        "OpenID Connect ile korunan güvenlik bulgusu takip API'si: bulgular, "
+        "kritiklik, SLA ve denetlenebilir durum değişiklikleri."
+    ),
+    version="2.0.0",
 )
 
 # Holds the PKCE code_verifier between /auth/login and /callback, and ties the
@@ -122,28 +131,57 @@ def _record_audit(
     db: Session,
     user: User,
     action: str,
-    task_id: int,
+    finding_id: int,
     detail: str | None = None,
 ) -> None:
     db.add(
-        AuditLog(user_id=user.id, action=action, task_id=task_id, detail=detail)
+        AuditLog(
+            user_id=user.id,
+            action=action,
+            finding_id=finding_id,
+            detail=detail,
+        )
     )
     db.commit()
 
 
-def _get_owned_task(task_id: int, user: User, db: Session) -> Task:
-    task = (
-        db.query(Task)
-        .filter(Task.id == task_id, Task.owner_id == user.id)
+def _get_owned_finding(finding_id: int, user: User, db: Session) -> Finding:
+    finding = (
+        db.query(Finding)
+        .filter(Finding.id == finding_id, Finding.owner_id == user.id)
         .first()
     )
 
-    # A task owned by someone else is reported as missing rather than
+    # A finding owned by someone else is reported as missing rather than
     # forbidden, so the endpoint does not confirm that the id exists.
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+    if finding is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
 
-    return task
+    return finding
+
+
+def _sla_due_date(severity: str) -> date:
+    """The remediation deadline implied by a severity, counted from today."""
+    return date.today() + timedelta(days=SLA_DAYS[severity])
+
+
+def _describe_changes(finding: Finding, new: FindingUpdate) -> str:
+    """Summarise an edit for the audit log.
+
+    Severity and status are spelled out because those two carry the risk
+    decision: downgrading a critical finding, or closing one as accepted risk,
+    must be readable in the log afterwards without diffing the row.
+    """
+    changes = [
+        f"{field} {before}→{after}"
+        for field, before, after in (
+            ("severity", finding.severity, new.severity),
+            ("status", finding.status, new.status),
+        )
+        if before != after
+    ]
+
+    return " · ".join([new.title, *changes])
 
 
 _FRONTEND = Path(__file__).parent / "static" / "index.html"
@@ -172,85 +210,96 @@ def database_health():
     return {"database": "connected"}
 
 
-@app.post("/tasks", response_model=TaskResponse)
-def create_task(
-    task: TaskCreate,
+@app.post("/findings", response_model=FindingResponse)
+def create_finding(
+    finding: FindingCreate,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    new_task = Task(
-        title=task.title,
-        description=task.description,
-        completed=task.completed,
-        priority=task.priority,
-        due_date=task.due_date,
+    new_finding = Finding(
+        title=finding.title,
+        description=finding.description,
+        asset=finding.asset,
+        severity=finding.severity,
+        status=finding.status,
+        due_date=finding.due_date or _sla_due_date(finding.severity),
         owner_id=user.id,
     )
 
-    db.add(new_task)
+    db.add(new_finding)
     db.commit()
-    db.refresh(new_task)
+    db.refresh(new_finding)
 
-    _record_audit(db, user, "created", new_task.id, new_task.title)
+    _record_audit(
+        db,
+        user,
+        "created",
+        new_finding.id,
+        f"{new_finding.title} · severity {new_finding.severity}",
+    )
 
-    return new_task
+    return new_finding
 
 
-@app.get("/tasks", response_model=list[TaskResponse])
-def get_tasks(
+@app.get("/findings", response_model=list[FindingResponse])
+def get_findings(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return db.query(Task).filter(Task.owner_id == user.id).all()
+    return db.query(Finding).filter(Finding.owner_id == user.id).all()
 
 
-@app.get("/tasks/{task_id}", response_model=TaskResponse)
-def get_task(
-    task_id: int,
+@app.get("/findings/{finding_id}", response_model=FindingResponse)
+def get_finding(
+    finding_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return _get_owned_task(task_id, user, db)
+    return _get_owned_finding(finding_id, user, db)
 
 
-@app.put("/tasks/{task_id}", response_model=TaskResponse)
-def update_task(
-    task_id: int,
-    task_data: TaskUpdate,
+@app.put("/findings/{finding_id}", response_model=FindingResponse)
+def update_finding(
+    finding_id: int,
+    finding_data: FindingUpdate,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    task = _get_owned_task(task_id, user, db)
+    finding = _get_owned_finding(finding_id, user, db)
 
-    task.title = task_data.title
-    task.description = task_data.description
-    task.completed = task_data.completed
-    task.priority = task_data.priority
-    task.due_date = task_data.due_date
+    # Read the change summary before the row is overwritten.
+    detail = _describe_changes(finding, finding_data)
+
+    finding.title = finding_data.title
+    finding.description = finding_data.description
+    finding.asset = finding_data.asset
+    finding.severity = finding_data.severity
+    finding.status = finding_data.status
+    finding.due_date = finding_data.due_date
 
     db.commit()
-    db.refresh(task)
+    db.refresh(finding)
 
-    _record_audit(db, user, "updated", task.id, task.title)
+    _record_audit(db, user, "updated", finding.id, detail)
 
-    return task
+    return finding
 
 
-@app.delete("/tasks/{task_id}")
-def delete_task(
-    task_id: int,
+@app.delete("/findings/{finding_id}")
+def delete_finding(
+    finding_id: int,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    task = _get_owned_task(task_id, user, db)
-    title = task.title
+    finding = _get_owned_finding(finding_id, user, db)
+    title = finding.title
 
-    db.delete(task)
+    db.delete(finding)
     db.commit()
 
-    _record_audit(db, user, "deleted", task_id, title)
+    _record_audit(db, user, "deleted", finding_id, title)
 
-    return {"message": "Task deleted"}
+    return {"message": "Finding deleted"}
 
 
 @app.get("/audit/me", response_model=list[AuditLogResponse])
@@ -267,36 +316,36 @@ def my_audit_log(
     )
 
 
-# --- Admin-only: elevated access across every user's tasks -----------------
+# --- Admin-only: elevated access across every user's findings --------------
 
 
-@app.get("/admin/tasks", response_model=list[TaskResponse])
-def admin_list_tasks(
+@app.get("/admin/findings", response_model=list[FindingResponse])
+def admin_list_findings(
     user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    return db.query(Task).all()
+    return db.query(Finding).all()
 
 
-@app.delete("/admin/tasks/{task_id}")
-def admin_delete_task(
-    task_id: int,
+@app.delete("/admin/findings/{finding_id}")
+def admin_delete_finding(
+    finding_id: int,
     user: User = Depends(require_role("admin")),
     db: Session = Depends(get_db),
 ):
-    task = db.query(Task).filter(Task.id == task_id).first()
+    finding = db.query(Finding).filter(Finding.id == finding_id).first()
 
-    if task is None:
-        raise HTTPException(status_code=404, detail="Task not found")
+    if finding is None:
+        raise HTTPException(status_code=404, detail="Finding not found")
 
-    title = task.title
+    title = finding.title
 
-    db.delete(task)
+    db.delete(finding)
     db.commit()
 
-    _record_audit(db, user, "deleted", task_id, f"{title} (admin)")
+    _record_audit(db, user, "deleted", finding_id, f"{title} (admin)")
 
-    return {"message": "Task deleted"}
+    return {"message": "Finding deleted"}
 
 
 @app.get("/admin/audit", response_model=list[AuditLogResponse])

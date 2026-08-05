@@ -3,26 +3,30 @@ from typing import Literal
 
 from pydantic import BaseModel
 
-Priority = Literal["low", "medium", "high"]
+Severity = Literal["low", "medium", "high", "critical"]
+Status = Literal["open", "triaged", "fixed", "accepted_risk"]
 
 
-class TaskCreate(BaseModel):
+class FindingCreate(BaseModel):
     title: str
     description: str | None = None
-    completed: bool = False
-    priority: Priority = "medium"
+    asset: str = ""
+    severity: Severity = "medium"
+    status: Status = "open"
+    # Left unset, the server derives it from severity (models.SLA_DAYS).
     due_date: date | None = None
 
 
-class TaskUpdate(BaseModel):
+class FindingUpdate(BaseModel):
     title: str
     description: str | None = None
-    completed: bool
-    priority: Priority = "medium"
+    asset: str = ""
+    severity: Severity = "medium"
+    status: Status = "open"
     due_date: date | None = None
 
 
-class TaskResponse(TaskCreate):
+class FindingResponse(FindingCreate):
     id: int
     owner_id: int | None = None
 
@@ -36,7 +40,7 @@ class AuditLogResponse(BaseModel):
     created_at: datetime
     user_id: int | None
     action: str
-    task_id: int | None
+    finding_id: int | None
     detail: str | None
 
     model_config = {

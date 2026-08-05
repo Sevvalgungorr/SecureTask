@@ -23,12 +23,15 @@
     --danger: #f43f5e;
     --accent-soft: #efeaff;
     --accent-ink: #ffffff;
-    /* Ordinal ramp for priority: one hue, light -> dark as priority rises.
-       Validated against the card surface (monotone lightness, >=0.06 steps,
-       light end clears 2:1 contrast). Not interchangeable with status colors. */
-    --prio-1: #a78bfa;
-    --prio-2: #7c4ded;
-    --prio-3: #4c2fb8;
+    /* Ordinal ramp for severity: one hue, light -> dark as severity rises.
+       Re-stepped from three to four when `critical` was added, then validated
+       against the card surface (monotone lightness, >=0.06 steps, light end
+       clears 2:1 contrast). Not interchangeable with status colors: --danger
+       stays reserved for "needs attention" (an SLA breach), never for a level. */
+    --sev-1: #a78bfa;
+    --sev-2: #8b5cf6;
+    --sev-3: #6d28d9;
+    --sev-4: #4c1d95;
     --sh-sm: 0 1px 2px rgba(24,20,48,.05);
     --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
     --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
@@ -52,11 +55,12 @@
       --danger: #fb7185;
       --accent-soft: #201a38;
       --accent-ink: #100c1c;
-      /* Re-stepped for the dark surface, not flipped: on dark, higher priority
+      /* Re-stepped for the dark surface, not flipped: on dark, higher severity
          reads lighter. Validated the same way against the dark card. */
-      --prio-1: #6d4bd8;
-      --prio-2: #9d7bff;
-      --prio-3: #cbb9ff;
+      --sev-1: #5b34c4;
+      --sev-2: #8257ee;
+      --sev-3: #a78bfa;
+      --sev-4: #cbb9ff;
       --sh-sm: 0 1px 2px rgba(0,0,0,.4);
       --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
       --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
@@ -71,9 +75,9 @@
     line-height: 1.5; -webkit-font-smoothing: antialiased;
   }
   @media (prefers-reduced-motion: no-preference) {
-    .task, .btn, .check, .stat-pill, .chip, .tab, .icon-btn, .ring-fg { transition: all .2s cubic-bezier(.4,0,.2,1); }
+    .finding, .btn, .stat-pill, .chip, .tab, .icon-btn, .ring-fg { transition: all .2s cubic-bezier(.4,0,.2,1); }
     @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-    li.task { animation: rise .28s ease both; }
+    li.finding { animation: rise .28s ease both; }
   }
 
   header {
@@ -171,13 +175,25 @@
   }
   .mini-select:focus, .mini-date:focus { border-color: var(--accent); }
 
-  .task .meta { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
-  .prio { font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; padding: .1rem .45rem; border-radius: 6px; flex-shrink: 0; }
-  .prio-high { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-  .prio-medium { color: var(--accent); background: var(--accent-soft); }
-  .prio-low { color: var(--muted); background: var(--line-2); }
+  .finding .meta { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
+  /* The ramp tints the chip; the label is always spelled out and the text keeps
+     an ink token, so the level never rests on colour alone (and never has to
+     win a contrast fight against four different backgrounds). */
+  .sev { font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .1rem .45rem; border-radius: 6px; flex-shrink: 0; color: var(--ink); }
+  .sev-low { background: color-mix(in srgb, var(--sev-1) 20%, transparent); }
+  .sev-medium { background: color-mix(in srgb, var(--sev-2) 22%, transparent); }
+  .sev-high { background: color-mix(in srgb, var(--sev-3) 26%, transparent); }
+  .sev-critical { background: color-mix(in srgb, var(--sev-4) 30%, transparent); }
+  .asset {
+    display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted);
+    background: var(--line-2); border: 1px solid var(--line); border-radius: 6px; padding: .06rem .4rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
   .due { display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .due svg { width: 12px; height: 12px; }
+  /* Reserved status colour: a missed remediation deadline, not a severity. */
   .due.overdue { color: var(--danger); font-weight: 700; }
 
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
@@ -190,31 +206,36 @@
   .chip:hover { color: var(--ink); }
   .chip.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
-  ul.tasks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
-  li.task {
+  ul.findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
+  li.finding {
     display: flex; align-items: center; gap: .85rem; background: var(--card);
     border: 1px solid var(--line); border-radius: 14px; padding: .8rem .9rem;
     box-shadow: var(--sh-sm); position: relative; overflow: hidden;
   }
-  li.task::before {
+  li.finding::before {
     content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
     background: linear-gradient(var(--accent), var(--accent-2)); opacity: 0; transition: opacity .2s;
   }
-  li.task:hover { box-shadow: var(--sh); transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
-  li.task:hover::before { opacity: 1; }
-  li.task.done::before { background: var(--ok); opacity: 1; }
+  li.finding:hover { box-shadow: var(--sh); transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+  li.finding:hover::before { opacity: 1; }
+  li.finding.closed::before { background: var(--ok); opacity: 1; }
+  /* Accepted risk is closed but not solved — it keeps the finding's colour,
+     so a list scan never reads it as "handled". */
+  li.finding.accepted::before { background: var(--sev-3); opacity: 1; }
 
-  .check {
-    width: 25px; height: 25px; border-radius: 8px; border: 2px solid var(--line);
-    cursor: pointer; flex-shrink: 0; display: grid; place-items: center; background: transparent; padding: 0;
+  /* The workflow state is a four-way choice, so it is a select, not a checkbox:
+     "fixed" and "accepted_risk" both close a finding and must stay tellable
+     apart. */
+  .state-select {
+    font: inherit; font-size: .78rem; font-weight: 700; color: var(--ink); background: var(--line-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: .28rem .45rem; outline: none;
+    cursor: pointer; flex-shrink: 0; max-width: 8.5rem;
   }
-  .check:hover { border-color: var(--accent); }
-  li.task.done .check { background: var(--ok); border-color: var(--ok); }
-  .check svg { width: 13px; height: 13px; stroke: #fff; stroke-width: 3.5; opacity: 0; transform: scale(.4); transition: all .2s; }
-  li.task.done .check svg { opacity: 1; transform: scale(1); }
+  .state-select:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
   .body { flex: 1; min-width: 0; }
   .title { font-weight: 600; word-break: break-word; }
-  li.task.done .title { text-decoration: line-through; color: var(--muted); }
+  li.finding.closed .title { text-decoration: line-through; color: var(--muted); }
+  li.finding.accepted .title { text-decoration: none; color: var(--ink); }
   .desc { font-size: .84rem; color: var(--muted); word-break: break-word; margin-top: .12rem; }
   .title-edit {
     font: inherit; font-weight: 600; width: 100%; color: var(--ink); background: var(--bg);
@@ -299,9 +320,10 @@
     /* Not a fixed white: on dark the ramp runs light, so the label must flip too. */
     color: var(--accent-ink); min-width: 2px; overflow: hidden;
   }
-  .stack .s1 { background: var(--prio-1); }
-  .stack .s2 { background: var(--prio-2); }
-  .stack .s3 { background: var(--prio-3); }
+  .stack .s1 { background: var(--sev-1); }
+  .stack .s2 { background: var(--sev-2); }
+  .stack .s3 { background: var(--sev-3); }
+  .stack .s4 { background: var(--sev-4); }
   .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; margin-top: .75rem; font-size: .82rem; color: var(--muted); }
   .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: .4rem; vertical-align: -1px; }
   .legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
@@ -446,10 +468,12 @@
   <!-- Logged out -->
   <section id="loginView" class="login hidden">
     <div class="pitch">
-      <h1>Görevlerin, <em>kurumsal kimliğinle</em> güvende.</h1>
+      <h1>Açıklarını takip et, <em>kurumsal kimliğinle</em>.</h1>
       <p class="lede">
-        SecureTask parolanı hiçbir zaman görmez. Giriş kimlik sağlayıcında yapılır;
-        uygulamaya yalnızca imzalı ve doğrulanmış bir kimlik ulaşır.
+        SecureTask bir güvenlik bulgusu takip aracıdır: hangi sistemde ne bulundu,
+        ne kadar kritik, ne zamana kadar kapatılmalı. Envanterin kendisi hassas
+        veridir — bu yüzden giriş kimlik sağlayıcında yapılır, uygulamaya yalnızca
+        imzalı ve doğrulanmış bir kimlik ulaşır.
       </p>
       <ul class="feats">
         <li>
@@ -458,11 +482,11 @@
         </li>
         <li>
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.87"/></svg></span>
-          <div><b>Rol bazlı yetkilendirme</b><span>Herkes yalnızca kendi görevine erişir; yönetim uçları ayrıdır</span></div>
+          <div><b>Rol bazlı yetkilendirme</b><span>Herkes yalnızca kendi bulgusunu görür; yönetim uçları ayrıdır</span></div>
         </li>
         <li>
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg></span>
-          <div><b>Denetim günlüğü</b><span>Kim, ne zaman, ne yaptı — reddedilen erişimler dahil</span></div>
+          <div><b>Denetim günlüğü</b><span>Kritikliği kim düşürdü, riski kim kabul etti — iz kalır</span></div>
         </li>
         <li>
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span>
@@ -488,7 +512,7 @@
 
     <div class="tabs hidden" id="tabs">
       <button class="tab active" data-view="dash" type="button">Pano</button>
-      <button class="tab" data-view="my" type="button">Görevlerim</button>
+      <button class="tab" data-view="my" type="button">Bulgularım</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
       <button class="tab" data-view="security" type="button">Güvenlik</button>
       <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
@@ -497,12 +521,12 @@
     <div id="dashView">
       <div class="kpis">
         <div class="kpi">
-          <span class="k-lbl">Toplam görev</span>
+          <span class="k-lbl">Açık bulgu</span>
           <b class="k-val" id="kTotal">0</b>
           <span class="k-sub" id="kTotalSub">—</span>
         </div>
         <div class="kpi">
-          <span class="k-lbl">Tamamlanma</span>
+          <span class="k-lbl">Kapatma oranı</span>
           <b class="k-val" id="kRate">0%</b>
           <span class="k-sub" id="kRateSub">—</span>
         </div>
@@ -512,9 +536,9 @@
           <span class="k-sub">kendi işlemin</span>
         </div>
         <div class="kpi" id="kOverdueCard">
-          <span class="k-lbl">Geciken</span>
+          <span class="k-lbl">SLA aşımı</span>
           <b class="k-val" id="kOverdue">0</b>
-          <span class="k-sub">bitiş tarihi geçmiş</span>
+          <span class="k-sub">süresi geçmiş, hâlâ açık</span>
         </div>
       </div>
 
@@ -525,9 +549,9 @@
       </div>
 
       <div class="admin-block">
-        <div class="list-head"><h2>Öncelik dağılımı</h2></div>
-        <div class="stack" id="prioStack"></div>
-        <div class="legend" id="prioLegend"></div>
+        <div class="list-head"><h2>Kritiklik dağılımı</h2><span class="badge">açık bulgular</span></div>
+        <div class="stack" id="sevStack"></div>
+        <div class="legend" id="sevLegend"></div>
       </div>
 
       <div class="admin-block hidden" id="denyBlock">
@@ -544,10 +568,10 @@
       <div class="summary">
         <div class="summary-text">
           <h1 class="hello" id="hello">Merhaba 👋</h1>
-          <p class="sub">Bugün ne yapmayı planlıyorsun?</p>
+          <p class="sub">Açık bulguların ve kapatma durumun.</p>
           <div class="stat-pills">
-            <span class="stat-pill done"><span class="dot"></span><b id="stDone">0</b> tamamlandı</span>
-            <span class="stat-pill pend"><span class="dot"></span><b id="stPend">0</b> bekliyor</span>
+            <span class="stat-pill done"><span class="dot"></span><b id="stDone">0</b> kapatıldı</span>
+            <span class="stat-pill pend"><span class="dot"></span><b id="stPend">0</b> açık</span>
           </div>
         </div>
         <div class="ring">
@@ -555,38 +579,40 @@
             <circle class="ring-bg" cx="46" cy="46" r="36"/>
             <circle class="ring-fg" id="ringFg" cx="46" cy="46" r="36"/>
           </svg>
-          <div class="ring-c"><span id="ringPct">0%</span><small>tamam</small></div>
+          <div class="ring-c"><span id="ringPct">0%</span><small>kapalı</small></div>
         </div>
       </div>
 
       <form class="add" id="addForm">
         <div class="fields">
-          <input id="titleInput" placeholder="Yeni görev başlığı…" autocomplete="off" required>
-          <input id="descInput" placeholder="Açıklama (isteğe bağlı)" autocomplete="off">
+          <input id="titleInput" placeholder="Bulgu başlığı — ör. HSTS başlığı eksik" autocomplete="off" required>
+          <input id="assetInput" placeholder="Varlık — ör. app.example.test" autocomplete="off">
+          <input id="descInput" placeholder="Kanıt / açıklama (isteğe bağlı)" autocomplete="off">
           <div class="add-meta">
-            <select id="prioInput" class="mini-select" title="Öncelik">
-              <option value="low">🟢 Düşük</option>
-              <option value="medium" selected>🔵 Orta</option>
-              <option value="high">🔴 Yüksek</option>
+            <select id="sevInput" class="mini-select" title="Kritiklik">
+              <option value="low">Düşük</option>
+              <option value="medium" selected>Orta</option>
+              <option value="high">Yüksek</option>
+              <option value="critical">Kritik</option>
             </select>
-            <input id="dueInput" type="date" class="mini-date" title="Bitiş tarihi">
+            <input id="dueInput" type="date" class="mini-date" title="SLA tarihi — boş bırakılırsa kritikliğe göre hesaplanır">
           </div>
         </div>
         <button class="btn" type="submit">Ekle</button>
       </form>
 
       <div class="list-head">
-        <h2>Görevler</h2>
+        <h2>Bulgular</h2>
         <div class="filters" id="filters">
           <button class="chip active" data-f="all" type="button">Tümü</button>
-          <button class="chip" data-f="active" type="button">Aktif</button>
-          <button class="chip" data-f="done" type="button">Tamamlanan</button>
+          <button class="chip" data-f="open" type="button">Açık</button>
+          <button class="chip" data-f="closed" type="button">Kapalı</button>
         </div>
       </div>
-      <ul class="tasks" id="taskList"></ul>
+      <ul class="findings" id="findingList"></ul>
       <div class="empty hidden" id="emptyState">
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
-        Henüz görevin yok.<br>Yukarıdan ilk görevini ekle.
+        Henüz kayıtlı bulgun yok.<br>Yukarıdan ilk bulguyu ekle.
       </div>
     </div>
 
@@ -623,6 +649,7 @@
           <li><span class="ck">✓</span> Rol tabanlı yetkilendirme (RBAC)</li>
           <li><span class="ck">✓</span> İstek sınırlama — brute-force koruması (rate limiting)</li>
           <li><span class="ck">✓</span> Denetim günlüğü + yetkisiz erişim kaydı</li>
+          <li><span class="ck">✓</span> Kritiklik düşürme ve risk kabulü ayrıca kayda geçer</li>
           <li><span class="ck">✓</span> Güvenlik başlıkları (nosniff, DENY, Referrer-Policy)</li>
           <li><span class="ck">✓</span> XSS &amp; SQL injection koruması</li>
         </ul>
@@ -631,8 +658,8 @@
 
     <div id="adminView" class="hidden">
       <div class="admin-block">
-        <div class="list-head"><h2>Tüm Görevler</h2><span class="badge" id="allCount">0</span></div>
-        <ul class="tasks" id="allTasks"></ul>
+        <div class="list-head"><h2>Tüm Bulgular</h2><span class="badge" id="allCount">0</span></div>
+        <ul class="findings" id="allFindings"></ul>
       </div>
       <div class="admin-block">
         <div class="list-head"><h2>Denetim Günlüğü</h2><span class="badge">son 100</span></div>
@@ -691,127 +718,178 @@ async function logout() {
   if (url) location.href = url; else render();
 }
 
-const CHECK = '<svg viewBox="0 0 24 24" fill="none" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>';
 const PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
 const CAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
-const PRIO_LABEL = { low: "Düşük", medium: "Orta", high: "Yüksek" };
-const PRIO_ORDER = { high: 0, medium: 1, low: 2 };
+const SEV_LABEL = { low: "Düşük", medium: "Orta", high: "Yüksek", critical: "Kritik" };
+const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
+const STATUS_LABEL = { open: "Açık", triaged: "Triyaj", fixed: "Düzeltildi", accepted_risk: "Risk kabul" };
+// Both end the work; only one removes the problem.
+const CLOSED = ["fixed", "accepted_risk"];
+const isClosed = f => CLOSED.includes(f.status);
 
 function fmtDate(d) { const p = d.split("-"); return p[2] + "." + p[1] + "." + p[0].slice(2); }
 function today() { return new Date().toISOString().slice(0, 10); }
-function isOverdue(t) { return t.due_date && !t.completed && t.due_date < today(); }
+// An SLA is only breached while the finding is still open; a closed one cannot
+// go on being late.
+function isOverdue(f) { return f.due_date && !isClosed(f) && f.due_date < today(); }
 
-function taskMeta(t) {
+function findingMeta(f) {
   const meta = document.createElement("div");
   meta.className = "meta";
-  const prio = document.createElement("span");
-  prio.className = "prio prio-" + t.priority;
-  prio.textContent = PRIO_LABEL[t.priority] || t.priority;
-  meta.appendChild(prio);
-  if (t.due_date) {
+  const sev = document.createElement("span");
+  sev.className = "sev sev-" + f.severity;
+  sev.textContent = SEV_LABEL[f.severity] || f.severity;
+  meta.appendChild(sev);
+  if (f.asset) {
+    const asset = document.createElement("span");
+    asset.className = "asset";
+    asset.textContent = f.asset;          // textContent → XSS'e kapalı
+    meta.appendChild(asset);
+  }
+  if (f.due_date) {
     const due = document.createElement("span");
-    due.className = "due" + (isOverdue(t) ? " overdue" : "");
-    due.innerHTML = CAL + "<span>" + fmtDate(t.due_date) + "</span>";
+    due.className = "due" + (isOverdue(f) ? " overdue" : "");
+    const label = document.createElement("span");
+    label.textContent = "SLA " + fmtDate(f.due_date) + (isOverdue(f) ? " · aşıldı" : "");
+    due.innerHTML = CAL;                  // static icon markup only
+    due.appendChild(label);
     meta.appendChild(due);
   }
   return meta;
 }
 
-let myTasks = [];
+// The row's own status control. Changing it PUTs the finding, so the change
+// lands in the audit log the same way any other edit does.
+function stateSelect(f, after) {
+  const sel = document.createElement("select");
+  sel.className = "state-select";
+  sel.title = "Durum";
+  Object.entries(STATUS_LABEL).forEach(([value, label]) => {
+    const opt = document.createElement("option");
+    opt.value = value;
+    opt.textContent = label;
+    if (f.status === value) opt.selected = true;
+    sel.appendChild(opt);
+  });
+  sel.onchange = async () => {
+    await saveFinding({ ...f, status: sel.value });
+    toast("Durum: " + STATUS_LABEL[sel.value]);
+    after();
+  };
+  return sel;
+}
+
+let myFindings = [];
 let filter = "all";
 let currentUser = null;
 
-function taskRow(t) {
-  const li = document.createElement("li");
-  li.className = "task" + (t.completed ? " done" : "");
+// A closed finding is struck through, except when the risk was accepted: that
+// one stays legible, because it is still a live risk someone chose to carry.
+function rowClass(f) {
+  if (f.status === "accepted_risk") return "finding accepted";
+  return "finding" + (isClosed(f) ? " closed" : "");
+}
 
-  const check = document.createElement("button");
-  check.className = "check"; check.title = "Tamamlandı olarak işaretle";
-  check.innerHTML = CHECK; check.onclick = () => toggle(t);
+function findingRow(f) {
+  const li = document.createElement("li");
+  li.className = rowClass(f);
 
   const body = document.createElement("div");
   body.className = "body";
   const title = document.createElement("div");
-  title.className = "title"; title.textContent = t.title;
+  title.className = "title"; title.textContent = f.title;
   body.appendChild(title);
-  if (t.description) {
+  if (f.description) {
     const d = document.createElement("div");
-    d.className = "desc"; d.textContent = t.description;
+    d.className = "desc"; d.textContent = f.description;
     body.appendChild(d);
   }
-  body.appendChild(taskMeta(t));
+  body.appendChild(findingMeta(f));
 
   const actions = document.createElement("div");
   actions.className = "actions";
   const edit = document.createElement("button");
   edit.className = "icon-btn"; edit.title = "Düzenle";
-  edit.innerHTML = PENCIL; edit.onclick = () => startEdit(li, t);
+  edit.innerHTML = PENCIL; edit.onclick = () => startEdit(li, f);
   const del = document.createElement("button");
   del.className = "icon-btn del-x"; del.title = "Sil";
-  del.innerHTML = TRASH; del.onclick = () => remove(t);
+  del.innerHTML = TRASH; del.onclick = () => remove(f);
   actions.append(edit, del);
 
-  li.append(check, body, actions);
+  li.append(stateSelect(f, loadFindings), body, actions);
   return li;
 }
 
+// Every write goes through here, so the payload stays complete: a PUT replaces
+// the whole finding, and a partial body would silently blank the other fields.
+function saveFinding(f) {
+  return api("/findings/" + f.id, {
+    method: "PUT",
+    body: JSON.stringify({
+      title: f.title,
+      description: f.description,
+      asset: f.asset || "",
+      severity: f.severity,
+      status: f.status,
+      due_date: f.due_date,
+    }),
+  });
+}
+
 // Inline rename: swap the title for an input, save on Enter/blur, cancel on Esc.
-function startEdit(li, t) {
+function startEdit(li, f) {
   const titleEl = li.querySelector(".title");
   const input = document.createElement("input");
-  input.className = "title-edit"; input.value = t.title;
+  input.className = "title-edit"; input.value = f.title;
   titleEl.replaceWith(input);
   input.focus(); input.select();
   let saving = false;
   const save = async () => {
     if (saving) return; saving = true;
     const v = input.value.trim();
-    if (v && v !== t.title) {
-      await api("/tasks/" + t.id, {
-        method: "PUT",
-        body: JSON.stringify({ title: v, description: t.description, completed: t.completed, priority: t.priority, due_date: t.due_date }),
-      });
-      toast("Görev güncellendi");
+    if (v && v !== f.title) {
+      await saveFinding({ ...f, title: v });
+      toast("Bulgu güncellendi");
     }
-    loadTasks();
+    loadFindings();
   };
   input.onkeydown = (e) => {
     if (e.key === "Enter") { e.preventDefault(); save(); }
-    if (e.key === "Escape") { saving = true; loadTasks(); }
+    if (e.key === "Escape") { saving = true; loadFindings(); }
   };
   input.onblur = save;
 }
 
-function setStats(tasks) {
-  const total = tasks.length, done = tasks.filter(t => t.completed).length;
-  const pct = total ? Math.round(done / total * 100) : 0;
-  document.getElementById("stDone").textContent = done;
-  document.getElementById("stPend").textContent = total - done;
+function setStats(findings) {
+  const total = findings.length, closed = findings.filter(isClosed).length;
+  const pct = total ? Math.round(closed / total * 100) : 0;
+  document.getElementById("stDone").textContent = closed;
+  document.getElementById("stPend").textContent = total - closed;
   document.getElementById("ringPct").textContent = pct + "%";
   document.getElementById("ringFg").style.strokeDashoffset = RING_C * (1 - pct / 100);
 }
 
 function renderMyList() {
-  const shown = myTasks
-    .filter(t => filter === "all" ? true : filter === "active" ? !t.completed : t.completed)
+  const shown = myFindings
+    .filter(f => filter === "all" ? true : filter === "open" ? !isClosed(f) : isClosed(f))
     .sort((a, b) => {
-      if (a.completed !== b.completed) return a.completed ? 1 : -1;       // bitmeyenler üstte
-      if (a.priority !== b.priority) return PRIO_ORDER[a.priority] - PRIO_ORDER[b.priority];
+      if (isClosed(a) !== isClosed(b)) return isClosed(a) ? 1 : -1;       // açık olanlar üstte
+      if (a.severity !== b.severity) return SEV_ORDER[a.severity] - SEV_ORDER[b.severity];
       if (a.due_date && b.due_date) return a.due_date < b.due_date ? -1 : 1;
       if (a.due_date) return -1;
       if (b.due_date) return 1;
       return a.id - b.id;
     });
-  const list = document.getElementById("taskList");
-  document.getElementById("emptyState").classList.toggle("hidden", myTasks.length > 0);
+  const list = document.getElementById("findingList");
+  document.getElementById("emptyState").classList.toggle("hidden", myFindings.length > 0);
   list.innerHTML = "";
-  shown.forEach(t => list.appendChild(taskRow(t)));
+  shown.forEach(f => list.appendChild(findingRow(f)));
 }
 
-async function loadTasks() {
-  myTasks = await api("/tasks");
-  setStats(myTasks);
+async function loadFindings() {
+  myFindings = await api("/findings");
+  setStats(myFindings);
   renderMyList();
 }
 
@@ -827,71 +905,68 @@ function setupFilters() {
 }
 setupFilters();
 
-async function toggle(t) {
-  await api("/tasks/" + t.id, {
-    method: "PUT",
-    body: JSON.stringify({ title: t.title, description: t.description, completed: !t.completed, priority: t.priority, due_date: t.due_date }),
-  });
-  loadTasks();
-}
-
-async function remove(t) {
-  await api("/tasks/" + t.id, { method: "DELETE" });
-  toast("Görev silindi"); loadTasks();
+async function remove(f) {
+  await api("/findings/" + f.id, { method: "DELETE" });
+  toast("Bulgu silindi"); loadFindings();
 }
 
 document.getElementById("addForm").onsubmit = async (e) => {
   e.preventDefault();
   const title = document.getElementById("titleInput");
+  const asset = document.getElementById("assetInput");
   const desc = document.getElementById("descInput");
-  const prio = document.getElementById("prioInput");
+  const sev = document.getElementById("sevInput");
   const due = document.getElementById("dueInput");
   if (!title.value.trim()) return;
-  await api("/tasks", {
+  // due_date left empty on purpose: the server fills it from the severity SLA.
+  await api("/findings", {
     method: "POST",
     body: JSON.stringify({
       title: title.value.trim(),
       description: desc.value.trim() || null,
-      priority: prio.value,
+      asset: asset.value.trim(),
+      severity: sev.value,
       due_date: due.value || null,
     }),
   });
-  title.value = ""; desc.value = ""; prio.value = "medium"; due.value = "";
-  toast("Görev eklendi"); loadTasks();
+  title.value = ""; asset.value = ""; desc.value = ""; sev.value = "medium"; due.value = "";
+  toast("Bulgu kaydedildi"); loadFindings();
 };
 
 // --- Admin panel ---------------------------------------------------------
 
-function adminTaskRow(t) {
+function adminFindingRow(f) {
   const li = document.createElement("li");
-  li.className = "task" + (t.completed ? " done" : "");
+  li.className = rowClass(f);
 
   const state = document.createElement("span");
-  state.className = "act " + (t.completed ? "created" : "updated");
-  state.textContent = t.completed ? "bitti" : "açık";
+  // The admin list is read-only on state: an admin browsing everyone's findings
+  // should not be able to change someone else's risk decision by mis-clicking.
+  state.className = "act " + (f.status === "fixed" ? "created" : isClosed(f) ? "deleted" : "updated");
+  state.textContent = STATUS_LABEL[f.status] || f.status;
 
   const body = document.createElement("div");
   body.className = "body";
   const title = document.createElement("div");
-  title.className = "title"; title.textContent = t.title;
+  title.className = "title"; title.textContent = f.title;
   body.appendChild(title);
-  if (t.description) {
+  if (f.description) {
     const d = document.createElement("div");
-    d.className = "desc"; d.textContent = t.description;
+    d.className = "desc"; d.textContent = f.description;
     body.appendChild(d);
   }
-  body.appendChild(taskMeta(t));
+  body.appendChild(findingMeta(f));
 
   const owner = document.createElement("span");
-  owner.className = "owner-badge"; owner.textContent = "sahip #" + t.owner_id;
+  owner.className = "owner-badge"; owner.textContent = "sahip #" + f.owner_id;
 
   const del = document.createElement("button");
   del.className = "icon-btn del-x"; del.title = "Sil (admin)";
   del.innerHTML = TRASH;
   del.onclick = async () => {
-    if (!confirm("Bu görevi silmek istediğine emin misin?")) return;
-    await api("/admin/tasks/" + t.id, { method: "DELETE" });
-    toast("Görev silindi (admin)"); loadAdmin();
+    if (!confirm("Bu bulguyu silmek istediğine emin misin?")) return;
+    await api("/admin/findings/" + f.id, { method: "DELETE" });
+    toast("Bulgu silindi (admin)"); loadAdmin();
   };
 
   li.append(state, body, owner, del);
@@ -906,7 +981,7 @@ function auditRow(a) {
   act.textContent = { created: "eklendi", updated: "güncellendi", deleted: "silindi" }[a.action] || a.action;
   const what = document.createElement("span");
   what.className = "what";
-  what.textContent = "#" + a.task_id + (a.detail ? " · " + a.detail : "");
+  what.textContent = "#" + a.finding_id + (a.detail ? " · " + a.detail : "");
   const when = document.createElement("span");
   when.className = "when";
   when.textContent = a.created_at ? a.created_at.slice(11, 19) : "";
@@ -915,11 +990,11 @@ function auditRow(a) {
 }
 
 async function loadAdmin() {
-  const all = await api("/admin/tasks");
+  const all = await api("/admin/findings");
   document.getElementById("allCount").textContent = all.length;
-  const at = document.getElementById("allTasks");
+  const at = document.getElementById("allFindings");
   at.innerHTML = "";
-  all.forEach(t => at.appendChild(adminTaskRow(t)));
+  all.forEach(f => at.appendChild(adminFindingRow(f)));
 
   const log = await api("/admin/audit");
   const al = document.getElementById("auditList");
@@ -1034,20 +1109,23 @@ function dailyCounts(entries, days) {
   }));
 }
 
-function renderPriority(tasks) {
+// Yalnızca AÇIK bulguların dağılımı: kapatılmışları da saymak, taşınan riski
+// olduğundan küçük gösterirdi — asıl soru "şu an neyi taşıyoruz".
+function renderSeverity(findings) {
   const order = [
+    { key: "critical", cls: "s4", label: "Kritik" },
     { key: "high", cls: "s3", label: "Yüksek" },
     { key: "medium", cls: "s2", label: "Orta" },
     { key: "low", cls: "s1", label: "Düşük" },
   ];
-  const total = tasks.length;
-  const stack = document.getElementById("prioStack");
-  const legend = document.getElementById("prioLegend");
+  const total = findings.length;
+  const stack = document.getElementById("sevStack");
+  const legend = document.getElementById("sevLegend");
   stack.innerHTML = "";
   legend.innerHTML = "";
 
   order.forEach(o => {
-    const n = tasks.filter(t => (t.priority || "medium") === o.key).length;
+    const n = findings.filter(f => (f.severity || "medium") === o.key).length;
     const seg = document.createElement("span");
     seg.className = o.cls;
     seg.style.flex = total ? n : 0;
@@ -1059,7 +1137,7 @@ function renderPriority(tasks) {
     const item = document.createElement("span");
     const swatch = document.createElement("i");
     // Kimlik rengi işarette durur; sayı ve etiket metin renginde kalır.
-    swatch.style.background = `var(--prio-${o.cls.slice(1)})`;
+    swatch.style.background = `var(--sev-${o.cls.slice(1)})`;
     item.appendChild(swatch);
     item.appendChild(document.createTextNode(o.label + " "));
     const b = document.createElement("b");
@@ -1070,23 +1148,25 @@ function renderPriority(tasks) {
 }
 
 async function loadDash() {
-  const tasks = myTasks;
-  const done = tasks.filter(t => t.completed).length;
-  const total = tasks.length;
+  const findings = myFindings;
+  const open = findings.filter(f => !isClosed(f));
+  const closed = findings.length - open.length;
+  const total = findings.length;
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const overdue = tasks.filter(
-    t => !t.completed && t.due_date && new Date(t.due_date) < today
-  ).length;
+  const overdue = open.filter(f => f.due_date && new Date(f.due_date) < today).length;
+  const critical = open.filter(f => f.severity === "critical").length;
 
-  document.getElementById("kTotal").textContent = total;
-  document.getElementById("kTotalSub").textContent = `${done} tamamlandı · ${total - done} bekliyor`;
-  document.getElementById("kRate").textContent = (total ? Math.round((done / total) * 100) : 0) + "%";
-  document.getElementById("kRateSub").textContent = total ? `${done}/${total} görev` : "henüz görev yok";
+  document.getElementById("kTotal").textContent = open.length;
+  document.getElementById("kTotalSub").textContent = total
+    ? `${critical} kritik · toplam ${total} bulgu`
+    : "henüz bulgu yok";
+  document.getElementById("kRate").textContent = (total ? Math.round((closed / total) * 100) : 0) + "%";
+  document.getElementById("kRateSub").textContent = total ? `${closed}/${total} kapatıldı` : "—";
   document.getElementById("kOverdue").textContent = overdue;
   document.getElementById("kOverdueCard").classList.toggle("alert", overdue > 0);
 
-  renderPriority(tasks);
+  renderSeverity(open);
 
   const days = lastDays(14);
   const log = await api("/audit/me");
@@ -1186,8 +1266,8 @@ function setupTabs() {
       const v = btn.dataset.view;
       Object.values(VIEWS).forEach(id => document.getElementById(id).classList.add("hidden"));
       document.getElementById(VIEWS[v]).classList.remove("hidden");
-      // Pano görev listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
-      if (v === "dash") loadTasks().then(loadDash).catch(() => {});
+      // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
+      if (v === "dash") loadFindings().then(loadDash).catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
       if (v === "security") loadSecurity().catch(() => {});
@@ -1233,10 +1313,10 @@ async function render() {
     who.querySelector(".name").textContent = me.username;
     who.querySelector(".role-badge").classList.toggle("hidden", !isAdmin);
     document.getElementById("hello").textContent = "Merhaba, " + (me.username || "") + " 👋";
-    // Everyone gets Görevlerim + Geçmişim; the Yönetim tab is admin-only.
+    // Everyone gets Bulgularım + Geçmişim; the Yönetim tab is admin-only.
     document.getElementById("tabs").classList.remove("hidden");
     document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
-    await loadTasks();
+    await loadFindings();
     await loadDash();
   } catch (e) {
     // A 401 already signed us out inside api(); anything else leaves us signed
