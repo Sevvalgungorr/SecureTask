@@ -46,3 +46,33 @@ jobs:
 
       - name: Run tests
         run: pytest -q
+
+  security:
+    runs-on: ubuntu-latest
+    # Independent of the test job: a dependency CVE and a failing test are
+    # different problems, and seeing which one broke should not need a click.
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install scanners
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements-dev.txt
+
+      # Known CVEs in what we depend on. This fails the build on purpose: an
+      # application that tracks other people's unpatched software should not
+      # ship with unpatched software. Fix by upgrading; if a finding genuinely
+      # does not apply, --ignore-vuln it with the reason written down.
+      - name: Audit dependencies for known vulnerabilities
+        run: pip-audit -r requirements.txt --strict
+
+      # Static analysis of our own code. Only medium-and-above at medium
+      # confidence: the low/low band is mostly noise, and a check nobody
+      # believes gets switched off.
+      - name: Static security analysis
+        run: bandit -r app --severity-level medium --confidence-level medium

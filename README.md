@@ -27,6 +27,8 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Günlük satırı uydurma (CWE-117) | Günlüğe yazılan değerlerde CR/LF temizlenir (`_sanitize_log`) | Kod incelemesi |
 | Depolanmış XSS (bulgu başlığı, varlık adı, kullanıcı adı) | Kullanıcı verisi DOM'a yalnızca `textContent` ile girer | Beyaz kutu incelemede bulunup düzeltildi (PR #9) |
 | Tarayıcı tarafı saldırı yüzeyi | CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy | Yanıt başlıkları |
+| Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
+| Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
 
 **Kapsam dışı (bilinçli):** çok kiracılı (multi-tenant) izolasyon, bulgu paylaşımı,
 şifreli alan bazlı depolama, token iptali kontrolü (introspection). Sonuncusu
@@ -90,6 +92,7 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
 - ✅ **Otomatik testler** — pytest ile 39 test, CI üzerinde her değişiklikte çalışır
+- 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
 
@@ -105,7 +108,7 @@ hiçbir zaman bir kritiklik seviyesi için kullanılmaz.
 
 ## Teknolojiler
 
-`Python` · `FastAPI` · `PostgreSQL` · `SQLAlchemy` · `Alembic` · `Pydantic` · `OAuth2 / OpenID Connect` · `JWT / JWKS` · `pytest` · `Docker`
+`Python` · `FastAPI` · `PostgreSQL` · `SQLAlchemy` · `Alembic` · `Pydantic` · `OAuth2 / OpenID Connect` · `JWT / JWKS` · `pytest` · `pip-audit` · `bandit` · `Docker`
 
 ## Otomatik API dokümanı
 
@@ -149,12 +152,20 @@ Sonra:
 - **Arayüz:** http://localhost:8000/app
 - **API dokümanı:** http://localhost:8000/docs
 
-## Testler
+## Testler ve güvenlik taraması
 
 ```bash
 pip install -r requirements-dev.txt
-pytest
+pytest                                      # 39 test
+pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
+bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
+
+Son ikisi CI'da ayrı bir iş olarak her push ve pull request'te çalışır ve
+**başarısız olursa derlemeyi kırar**. Bilerek: başkasının yamalanmamış
+yazılımını takip eden bir uygulama, yamalanmamış yazılımla dağıtılmamalı.
+Bir bulgu gerçekten geçerli değilse `--ignore-vuln` ile ve **gerekçesi
+yazılarak** susturulur.
 
 Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamayı taklit eder (OIDC sağlayıcısına bağlanmaz). Her `push` ve `pull request`'te GitHub Actions üzerinde otomatik çalışır.
 
@@ -201,7 +212,6 @@ tests/          # pytest test paketi
 ## Sıradaki işler
 
 - **Token iptali kontrolü (introspection)** — sağlayıcıda oturum kapatılınca token'ın burada da geçersiz olması
-- **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz)
 - **Denetim günlüğü bütünlüğü** — hash zinciri: kayıt değiştirilirse zincir kırılır
 
 ## License
