@@ -3,7 +3,7 @@ from collections import defaultdict, deque
 from datetime import date, timedelta
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from sqlalchemy import text
 from sqlalchemy.orm import Session
@@ -19,6 +19,7 @@ from app.auth import (
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
+from app.importers import parse_nuclei
 from app.models import ACCEPTED_RISK, SLA_DAYS, AuditLog, Finding, User
 from app.schemas import (
     AuditLogResponse,
@@ -318,6 +319,107 @@ def delete_finding(
     _record_audit(db, user, "deleted", finding_id, title)
 
     return {"message": "Finding deleted"}
+
+
+@app.post("/import/nuclei")
+async def import_nuclei(
+    request: Request,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ingest a nuclei scan.
+
+    Re-running a scan is normal, so the import is idempotent on
+    `(owner, asset, source_ref)`. What it may do to an existing finding is
+    deliberately narrow:
+
+    * a finding closed as **fixed** that the scanner still sees is **reopened** —
+      the evidence says it was not fixed;
+    * a finding whose risk was **accepted** is left exactly as it is. The scanner
+      finding it again is the expected outcome of that decision, not news, and
+      an import must not quietly undo a decision that required a second factor;
+    * an already-open finding is left alone — including its severity. If someone
+      triaged a high down to low, the next scan does not get to overrule them.
+
+    So a scan can add work and can prove that work was not finished. It cannot
+    erase a judgement.
+    """
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    results, skipped = parse_nuclei(raw)
+
+    if not results and not skipped:
+        raise HTTPException(status_code=400, detail="Okunabilir tarama sonucu yok")
+
+    created = reopened = unchanged = kept_accepted = 0
+
+    for result in results:
+        existing = (
+            db.query(Finding)
+            .filter(
+                Finding.owner_id == user.id,
+                Finding.asset == result.asset,
+                Finding.source_ref == result.source_ref,
+            )
+            .first()
+        )
+
+        if existing is None:
+            finding = Finding(
+                title=result.title,
+                description=result.description,
+                asset=result.asset,
+                severity=result.severity,
+                status="open",
+                due_date=_sla_due_date(result.severity),
+                source="nuclei",
+                source_ref=result.source_ref,
+                owner_id=user.id,
+            )
+            db.add(finding)
+            db.flush()  # need the id for the audit entry
+            _record_audit(
+                db,
+                user,
+                "created",
+                finding.id,
+                f"{finding.title} · severity {finding.severity} · nuclei ile içe aktarıldı",
+            )
+            created += 1
+        elif existing.status == ACCEPTED_RISK:
+            kept_accepted += 1
+        elif existing.status == "fixed":
+            existing.status = "open"
+            # A finding that came back needs a fresh deadline; keeping the old
+            # one would file it as overdue the moment it reopens.
+            existing.due_date = _sla_due_date(existing.severity)
+            _record_audit(
+                db,
+                user,
+                "updated",
+                existing.id,
+                f"{existing.title} · status fixed→open · tarama hâlâ görüyor",
+            )
+            reopened += 1
+        else:
+            unchanged += 1
+
+    summary = (
+        f"nuclei: {created} yeni · {reopened} yeniden açıldı · {unchanged} değişmedi "
+        f"· {kept_accepted} risk kabul (korundu) · {skipped} okunamadı"
+    )
+    # finding_id is None: this entry is about the import, not one finding.
+    db.add(
+        AuditLog(user_id=user.id, action="imported", detail=_sanitize_log(summary))
+    )
+    db.commit()
+
+    return {
+        "created": created,
+        "reopened": reopened,
+        "unchanged": unchanged,
+        "kept_accepted": kept_accepted,
+        "skipped": skipped,
+    }
 
 
 @app.get("/audit/me", response_model=list[AuditLogResponse])

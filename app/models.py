@@ -4,6 +4,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     UniqueConstraint,
@@ -42,11 +43,23 @@ class Finding(Base):
     # Remediation deadline. Derived from severity at creation time when the
     # reporter does not set one — see SLA_DAYS.
     due_date = Column(Date)
+    # Where the finding came from: "manual" or a scanner name. Together with
+    # source_ref this is what makes a re-scan update the existing finding
+    # instead of filing a duplicate.
+    source = Column(String(30), nullable=False, server_default="manual")
+    # The scanner's own identifier for the rule that fired (nuclei's
+    # template-id). Empty for anything typed in by hand.
+    source_ref = Column(String(255), nullable=False, server_default="")
     owner_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
         nullable=False,
         index=True,
+    )
+
+    __table_args__ = (
+        # The lookup an import does for every incoming result.
+        Index("ix_findings_dedupe", "owner_id", "asset", "source_ref"),
     )
 
 
