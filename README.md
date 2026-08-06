@@ -20,6 +20,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Yetkisiz yönetim erişimi | `require_role("admin")` ile korunan `/admin/*` uçları | `test_findings.py::test_admin_sees_all_findings_others_forbidden` |
 | Riskin sessizce yok edilmesi (kritikliği düşürme, "risk kabul" ile kapatma) | Denetim günlüğü değişikliği açıkça yazar: `severity critical→low`, `status open→accepted_risk` | `test_audit.py::test_severity_and_status_changes_are_spelled_out` |
 | Ele geçirilmiş bir oturumun riski kabul edip kapatması | **Step-up MFA**: `accepted_risk`'e geçiş, token'daki `amr`/`acr` ile ikinci faktör kanıtlanmadıkça reddedilir (fail-closed) | `test_step_up.py` (8 test) |
+| Otomasyonun insan kararını ezmesi | İçe aktarma mevcut kritikliği **değiştirmez** ve risk kabulüne **dokunmaz**; yalnızca "düzeltildi" denip kapatılan ama hâlâ görülen bulguyu yeniden açar | `test_import.py` (15 test) |
 | İz silme / kaydın kaybolması | Denetim kaydı bulgudan bağımsız yaşar (FK değil), bulgu silinse bile kalır | `test_audit.py::test_audit_survives_finding_deletion` |
 | Kaba kuvvet ve kötüye kullanım | IP başına istek sınırı (rate limit), 429 | Arayüzde uyarı, manuel test |
 | Yetkisiz erişim denemesinin görünmezliği | 401/403 dönen her istek `access_denied` olarak günlüğe yazılır | Panodaki "Reddedilen erişimler" grafiği |
@@ -31,6 +32,32 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 şifreli alan bazlı depolama, token iptali kontrolü (introspection). Sonuncusu
 bilinen bir açık: token JWKS ile *yerel* doğrulandığı için, sağlayıcıda oturum
 iptal edilse bile token süresi dolana kadar geçerli kalır.
+
+### Tarama çıktısı içe aktarma
+
+```bash
+nuclei -u https://hedef -jsonl -o scan.jsonl
+curl -X POST http://localhost:8000/import/nuclei \
+     -H "Authorization: Bearer $TOKEN" --data-binary @scan.jsonl
+# {"created":12,"reopened":1,"unchanged":34,"kept_accepted":2,"skipped":0}
+```
+
+Hem JSON dizisi hem satır-başına-nesne (JSONL) kabul edilir; bozuk bir satır
+taramanın geri kalanını kaybettirmez, sayılır. Aynı hedef ikinci kez taranınca
+kopya oluşmaz: eşleşme `(sahip, varlık, template-id)` üzerinden yapılır.
+
+**Bir tarama iş ekleyebilir ve işin bitmediğini kanıtlayabilir; bir kararı silemez:**
+
+| Mevcut durum | Tarama onu yine görürse |
+| --- | --- |
+| Yok | Yeni bulgu oluşturulur, SLA kritiklikten atanır |
+| Açık / Triyaj | Dokunulmaz — **kritikliği de değişmez.** Biri "yüksek"i bilerek "düşük"e çektiyse, sonraki tarama bunu veto edemez |
+| Düzeltildi | **Yeniden açılır** ve yeni SLA alır — kanıt, işaretin aksini söylüyor |
+| Risk kabul | **Dokunulmaz.** Taramanın onu yine görmesi, o kararın beklenen sonucudur; ikinci faktör istemiş bir kararı bir içe aktarma sessizce geri alamaz |
+
+Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmış bir
+kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
+denetim günlüğüne bir özet satırı bırakır.
 
 ### Step-up doğrulama nasıl çalışır
 
@@ -57,11 +84,12 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
+- 📥 **Tarama çıktısı içe aktarma** — nuclei JSON/JSONL; yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
 - 👤 **Kullanıcıya özel envanter** — herkes yalnızca kendi bulgularına erişir
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 24 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 39 test, CI üzerinde her değişiklikte çalışır
 
 ![Pano](docs/images/dashboard.png)
 
@@ -137,6 +165,7 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `GET` | `/auth/login`, `/callback` | Giriş akışı |
 | `GET` | `/auth/me`, `/auth/logout` | Bearer |
 | `POST` `GET` `PUT` `DELETE` | `/findings`, `/findings/{id}` | Bearer (yalnızca sahibi) |
+| `POST` | `/import/nuclei` | Bearer (tarama çıktısı) |
 | `GET` | `/audit/me` | Bearer (kendi geçmişi) |
 | `GET` `DELETE` | `/admin/findings`, `/admin/findings/{id}` | Yalnızca `admin` |
 | `GET` | `/admin/audit` | Yalnızca `admin` |
@@ -144,7 +173,8 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 ## Veri modeli
 
 ```
-Finding    id · title · description · asset · severity · status · due_date · owner_id
+Finding    id · title · description · asset · severity · status · due_date
+           source · source_ref · owner_id
 User       id · username · email · oidc_issuer · oidc_sub · is_active
 AuditLog   id · created_at · user_id · action · finding_id · detail
 ```
@@ -158,6 +188,7 @@ app/
   main.py       # API uçları
   auth.py       # OIDC giriş + token doğrulama
   models.py     # veritabanı tabloları (Finding, User, AuditLog)
+  importers.py  # tarayıcı çıktısı ayrıştırma (nuclei)
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı
   config.py     # ortam ayarları

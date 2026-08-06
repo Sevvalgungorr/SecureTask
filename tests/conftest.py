@@ -72,6 +72,10 @@ def _make_user(db, username, roles, amr, acr):
 def client(db):
     """A TestClient bound to the test DB. Call client.login_as(...) to
     authenticate; without it, requests are unauthenticated (401)."""
+    # The rate limiter counts per client address in module-level state, and
+    # every test shares one address. Left alone, a long enough suite starts
+    # failing on 429 for reasons that have nothing to do with what it tests.
+    main_module._hits.clear()
     app.dependency_overrides[get_db] = lambda: db
     test_client = TestClient(app)
 

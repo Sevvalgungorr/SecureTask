@@ -175,6 +175,20 @@
   }
   .mini-select:focus, .mini-date:focus { border-color: var(--accent); }
 
+  .import-row {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin: -.7rem .3rem 1.3rem; font-size: .84rem; color: var(--muted);
+  }
+  .import-row label { cursor: pointer; }
+  .import-note { font-size: .8rem; color: var(--faint); }
+  /* Scanner-filed findings are marked, because "a tool saw this" and "a person
+     wrote this down" are different kinds of claim. */
+  .src {
+    font-size: .64rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .1rem .4rem; border-radius: 6px; flex-shrink: 0;
+    color: var(--muted); background: var(--line-2); border: 1px solid var(--line);
+  }
+
   .finding .meta { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
   /* The ramp tints the chip; the label is always spelled out and the text keeps
      an ink token, so the level never rests on colour alone (and never has to
@@ -340,6 +354,8 @@
   .act.created { color: var(--ok); background: var(--ok-soft); }
   .act.updated { color: var(--warn); background: var(--accent-soft); }
   .act.deleted { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  .act.imported { color: var(--accent); background: var(--accent-soft); }
+  .act.access_denied { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .audit-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .audit-row .when { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 
@@ -601,6 +617,15 @@
         <button class="btn" type="submit">Ekle</button>
       </form>
 
+      <div class="import-row">
+        <span>veya bir <b>nuclei</b> tarama çıktısı yükle</span>
+        <!-- Gizli input + label: dosya seçicinin varsayılan görünümü sayfanın
+             geri kalanıyla uyuşmuyor, davranışı ise aynen korunuyor. -->
+        <input type="file" id="importInput" accept=".json,.jsonl,.txt,application/json" class="hidden">
+        <label class="btn ghost sm" for="importInput" id="importLabel">Dosya seç…</label>
+        <span class="import-note" id="importNote"></span>
+      </div>
+
       <div class="list-head">
         <h2>Bulgular</h2>
         <div class="filters" id="filters">
@@ -755,6 +780,13 @@ function findingMeta(f) {
     asset.className = "asset";
     asset.textContent = f.asset;          // textContent → XSS'e kapalı
     meta.appendChild(asset);
+  }
+  if (f.source && f.source !== "manual") {
+    const src = document.createElement("span");
+    src.className = "src";
+    src.textContent = f.source;
+    src.title = f.source_ref || "";
+    meta.appendChild(src);
   }
   if (f.due_date) {
     const due = document.createElement("span");
@@ -953,6 +985,32 @@ document.getElementById("addForm").onsubmit = async (e) => {
   toast("Bulgu kaydedildi"); loadFindings();
 };
 
+// Tarama çıktısını içe aktar. Dosya tarayıcıda okunur ve gövdesi olduğu gibi
+// gönderilir — ayrıştırma sunucuda yapılır, çünkü kuralları (tekilleştirme,
+// yeniden açma, risk kabulüne dokunmama) uygulayan taraf orası.
+document.getElementById("importInput").onchange = async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const label = document.getElementById("importLabel");
+  const note = document.getElementById("importNote");
+  label.textContent = "Yükleniyor…";
+  note.textContent = "";
+  try {
+    const r = await api("/import/nuclei", { method: "POST", body: await file.text() });
+    note.textContent =
+      `${r.created} yeni · ${r.reopened} yeniden açıldı · ${r.unchanged} değişmedi` +
+      (r.kept_accepted ? ` · ${r.kept_accepted} risk kabul korundu` : "") +
+      (r.skipped ? ` · ${r.skipped} okunamadı` : "");
+    toast(`${r.created} bulgu içe aktarıldı`);
+    loadFindings();
+  } catch (err) {
+    note.textContent = err.message;
+  } finally {
+    label.textContent = "Dosya seç…";
+    e.target.value = "";     // aynı dosya tekrar seçilebilsin
+  }
+};
+
 // --- Admin panel ---------------------------------------------------------
 
 function adminFindingRow(f) {
@@ -998,10 +1056,15 @@ function auditRow(a) {
   li.className = "audit-row";
   const act = document.createElement("span");
   act.className = "act " + a.action;
-  act.textContent = { created: "eklendi", updated: "güncellendi", deleted: "silindi" }[a.action] || a.action;
+  act.textContent = {
+    created: "eklendi", updated: "güncellendi", deleted: "silindi",
+    imported: "içe aktarıldı", access_denied: "reddedildi",
+  }[a.action] || a.action;
   const what = document.createElement("span");
   what.className = "what";
-  what.textContent = "#" + a.finding_id + (a.detail ? " · " + a.detail : "");
+  // İçe aktarma kaydı tek bir bulguya ait değil, o yüzden id'si yok.
+  const ref = a.finding_id ? "#" + a.finding_id : "";
+  what.textContent = [ref, a.detail].filter(Boolean).join(" · ");
   const when = document.createElement("span");
   when.className = "when";
   when.textContent = a.created_at ? a.created_at.slice(11, 19) : "";

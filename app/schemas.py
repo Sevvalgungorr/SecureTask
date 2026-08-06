@@ -29,6 +29,10 @@ class FindingUpdate(BaseModel):
 class FindingResponse(FindingCreate):
     id: int
     owner_id: int | None = None
+    # Read-only: a client does not get to claim a finding came from a scanner.
+    # Only the import endpoint sets these.
+    source: str = "manual"
+    source_ref: str = ""
 
     model_config = {
         "from_attributes": True
