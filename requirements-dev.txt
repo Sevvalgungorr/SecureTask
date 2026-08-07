@@ -1,2 +1,8 @@
 # Test dependencies — install with: pip install -r requirements-dev.txt
 pytest>=8.0
+
+# Security scanning, run in CI on every push and pull request.
+# pip-audit checks the installed dependencies against known CVEs; bandit reads
+# our own source for the patterns that usually precede a vulnerability.
+pip-audit>=2.7
+bandit>=1.7
