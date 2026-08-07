@@ -22,6 +22,8 @@ SLA_DAYS = {"critical": 7, "high": 14, "medium": 30, "low": 90}
 ACCEPTED_RISK = "accepted_risk"
 CLOSED_STATUSES = ("fixed", ACCEPTED_RISK)
 
+SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
+
 
 class Finding(Base):
     """A security finding: something wrong on an asset, and its remediation."""
@@ -50,6 +52,12 @@ class Finding(Base):
     # The scanner's own identifier for the rule that fired (nuclei's
     # template-id). Empty for anything typed in by hand.
     source_ref = Column(String(255), nullable=False, server_default="")
+    # What the source last rated this, as opposed to what the row now says.
+    # Keeping the two apart is what lets a re-run tell "the evidence got worse"
+    # (the source's rating rose) from "a person disagreed with the tool" (the
+    # source is saying exactly what it said last time). Only the first is a
+    # reason to overwrite a human's severity.
+    source_severity = Column(String(10), nullable=False, server_default="")
     owner_id = Column(
         Integer,
         ForeignKey("users.id", ondelete="CASCADE"),
@@ -60,6 +68,35 @@ class Finding(Base):
     __table_args__ = (
         # The lookup an import does for every incoming result.
         Index("ix_findings_dedupe", "owner_id", "asset", "source_ref"),
+    )
+
+
+class Asset(Base):
+    """A host this installation is allowed to check.
+
+    Monitoring means the server makes connections on a user's behalf, so the
+    target cannot be a free-form string handed in with the request. It has to be
+    registered first, which turns "scan anything" into "check the things we
+    already said are ours".
+    """
+
+    __tablename__ = "assets"
+    __table_args__ = (
+        UniqueConstraint("owner_id", "host", name="uq_assets_owner_host"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    # Hostname, optionally with a port. No scheme, no path: a host is what is
+    # checked, and allowing a path would invite the URL to carry more than it
+    # should.
+    host = Column(String(255), nullable=False)
+    label = Column(String(255), nullable=False, server_default="")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    owner_id = Column(
+        Integer,
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
     )
 
 

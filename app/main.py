@@ -20,8 +20,19 @@ from app.auth import (
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
 from app.importers import parse_nuclei
-from app.models import ACCEPTED_RISK, SLA_DAYS, AuditLog, Finding, User
+from app.monitor import TargetRefused, assert_target_allowed, run_checks
+from app.models import (
+    ACCEPTED_RISK,
+    SEVERITY_ORDER,
+    SLA_DAYS,
+    Asset,
+    AuditLog,
+    Finding,
+    User,
+)
 from app.schemas import (
+    AssetCreate,
+    AssetResponse,
     AuditLogResponse,
     FindingCreate,
     FindingResponse,
@@ -350,7 +361,7 @@ async def import_nuclei(
     if not results and not skipped:
         raise HTTPException(status_code=400, detail="Okunabilir tarama sonucu yok")
 
-    created = reopened = unchanged = kept_accepted = 0
+    created = reopened = escalated = unchanged = kept_accepted = 0
 
     for result in results:
         existing = (
@@ -373,6 +384,7 @@ async def import_nuclei(
                 due_date=_sla_due_date(result.severity),
                 source="nuclei",
                 source_ref=result.source_ref,
+                source_severity=result.severity,
                 owner_id=user.id,
             )
             db.add(finding)
@@ -387,25 +399,41 @@ async def import_nuclei(
             created += 1
         elif existing.status == ACCEPTED_RISK:
             kept_accepted += 1
-        elif existing.status == "fixed":
-            existing.status = "open"
-            # A finding that came back needs a fresh deadline; keeping the old
-            # one would file it as overdue the moment it reopens.
-            existing.due_date = _sla_due_date(existing.severity)
-            _record_audit(
-                db,
-                user,
-                "updated",
-                existing.id,
-                f"{existing.title} · status fixed→open · tarama hâlâ görüyor",
-            )
-            reopened += 1
         else:
-            unchanged += 1
+            # Same rule as the monitor: the scanner's own rating going up is new
+            # evidence, the scanner repeating itself is not.
+            escalated_from = _escalate_from_source(existing, result.severity)
+
+            if existing.status == "fixed":
+                existing.status = "open"
+                # A finding that came back needs a fresh deadline; keeping the
+                # old one would file it as overdue the moment it reopens.
+                existing.due_date = _sla_due_date(existing.severity)
+                _record_audit(
+                    db,
+                    user,
+                    "updated",
+                    existing.id,
+                    f"{existing.title} · status fixed→open · tarama hâlâ görüyor",
+                )
+                reopened += 1
+            elif escalated_from is not None:
+                existing.due_date = _sla_due_date(existing.severity)
+                _record_audit(
+                    db,
+                    user,
+                    "updated",
+                    existing.id,
+                    f"{existing.title} · severity {escalated_from}→{existing.severity} · nuclei",
+                )
+                escalated += 1
+            else:
+                unchanged += 1
 
     summary = (
-        f"nuclei: {created} yeni · {reopened} yeniden açıldı · {unchanged} değişmedi "
-        f"· {kept_accepted} risk kabul (korundu) · {skipped} okunamadı"
+        f"nuclei: {created} yeni · {reopened} yeniden açıldı · {escalated} yükseltildi "
+        f"· {unchanged} değişmedi · {kept_accepted} risk kabul (korundu) "
+        f"· {skipped} okunamadı"
     )
     # finding_id is None: this entry is about the import, not one finding.
     db.add(
@@ -416,10 +444,257 @@ async def import_nuclei(
     return {
         "created": created,
         "reopened": reopened,
+        "escalated": escalated,
         "unchanged": unchanged,
         "kept_accepted": kept_accepted,
         "skipped": skipped,
     }
+
+
+# --- Monitoring: registered assets, and the checks run against them --------
+
+
+@app.post("/assets", response_model=AssetResponse)
+def create_asset(
+    asset: AssetCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    host = asset.host.strip().lower()
+
+    # A scheme or a path would mean the value carries more than a host, and the
+    # checks only ever address a host.
+    if not host or "/" in host or "://" in host or " " in host:
+        raise HTTPException(
+            status_code=422,
+            detail="Yalnızca ana bilgisayar adı girin (şema ve yol olmadan)",
+        )
+
+    # Refuse at registration as well as at run time. Rejecting only later would
+    # leave a list of targets that look accepted and silently never run.
+    try:
+        assert_target_allowed(host)
+    except TargetRefused as error:
+        raise HTTPException(status_code=422, detail=str(error)) from error
+
+    existing = (
+        db.query(Asset)
+        .filter(Asset.owner_id == user.id, Asset.host == host)
+        .first()
+    )
+
+    if existing is not None:
+        raise HTTPException(status_code=409, detail="Bu varlık zaten kayıtlı")
+
+    new_asset = Asset(host=host, label=asset.label.strip(), owner_id=user.id)
+    db.add(new_asset)
+    db.commit()
+    db.refresh(new_asset)
+
+    return new_asset
+
+
+@app.get("/assets", response_model=list[AssetResponse])
+def list_assets(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return db.query(Asset).filter(Asset.owner_id == user.id).all()
+
+
+@app.delete("/assets/{asset_id}")
+def delete_asset(
+    asset_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    asset = (
+        db.query(Asset)
+        .filter(Asset.id == asset_id, Asset.owner_id == user.id)
+        .first()
+    )
+
+    if asset is None:
+        raise HTTPException(status_code=404, detail="Asset not found")
+
+    db.delete(asset)
+    db.commit()
+
+    return {"message": "Asset deleted"}
+
+
+def _escalate_from_source(finding: Finding, reported: str) -> str | None:
+    """Raise a finding's severity when the *tool's own* rating went up.
+
+    Compared against what the source said last time, not against the finding's
+    current severity. A tool repeating itself is not new information, so a
+    person who lowered this stays lowered; a tool that has started saying
+    something worse — a certificate with two days left rather than twenty-eight
+    — is reporting a different fact, and that outranks the earlier judgement.
+    """
+    previous = finding.source_severity or finding.severity
+    finding.source_severity = reported
+
+    if SEVERITY_ORDER[reported] <= SEVERITY_ORDER[previous]:
+        return None
+
+    if SEVERITY_ORDER[reported] <= SEVERITY_ORDER[finding.severity]:
+        return None
+
+    before = finding.severity
+    finding.severity = reported
+
+    return before
+
+
+def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
+    """Fold one host's check results into its findings.
+
+    The rules follow the importer's, for the same reason: a check reports what
+    it observed, a person decided what it means. The one place this goes
+    further is severity, and only upwards — a certificate that had thirty days
+    left and now has two is not a re-litigation of anyone's judgement, it is a
+    different fact. It is never lowered automatically.
+    """
+    counts = {"created": 0, "reopened": 0, "escalated": 0, "resolved": 0,
+              "unchanged": 0, "kept_accepted": 0}
+    seen_refs = set()
+
+    for result in results:
+        seen_refs.add(result.check_id)
+        finding = (
+            db.query(Finding)
+            .filter(
+                Finding.owner_id == user.id,
+                Finding.asset == host,
+                Finding.source == "monitor",
+                Finding.source_ref == result.check_id,
+            )
+            .first()
+        )
+
+        if finding is None:
+            finding = Finding(
+                title=result.title,
+                description=result.detail,
+                asset=host,
+                severity=result.severity,
+                status="open",
+                due_date=_sla_due_date(result.severity),
+                source="monitor",
+                source_ref=result.check_id,
+                source_severity=result.severity,
+                owner_id=user.id,
+            )
+            db.add(finding)
+            db.flush()
+            _record_audit(
+                db, user, "created", finding.id,
+                f"{finding.title} · severity {finding.severity} · monitör",
+            )
+            counts["created"] += 1
+            continue
+
+        if finding.status == ACCEPTED_RISK:
+            counts["kept_accepted"] += 1
+            continue
+
+        # The evidence is current either way, so the description is refreshed
+        # even when nothing else changes: "2 gün kaldı" beating a stale "28 gün
+        # kaldı" is the whole value of re-running.
+        finding.description = result.detail
+
+        escalated_from = _escalate_from_source(finding, result.severity)
+
+        if finding.status == "fixed":
+            finding.status = "open"
+            finding.due_date = _sla_due_date(finding.severity)
+            _record_audit(
+                db, user, "updated", finding.id,
+                f"{finding.title} · status fixed→open · monitör hâlâ görüyor",
+            )
+            counts["reopened"] += 1
+        elif escalated_from is not None:
+            finding.due_date = _sla_due_date(finding.severity)
+            _record_audit(
+                db, user, "updated", finding.id,
+                f"{finding.title} · severity {escalated_from}→{finding.severity} · monitör",
+            )
+            counts["escalated"] += 1
+        else:
+            counts["unchanged"] += 1
+
+    # Anything this monitor opened for this host that no check reported is
+    # fixed — the monitor is allowed to close what the monitor opened.
+    stale = (
+        db.query(Finding)
+        .filter(
+            Finding.owner_id == user.id,
+            Finding.asset == host,
+            Finding.source == "monitor",
+            Finding.status.in_(("open", "triaged")),
+        )
+        .all()
+    )
+
+    for finding in stale:
+        if finding.source_ref in seen_refs:
+            continue
+
+        finding.status = "fixed"
+        _record_audit(
+            db, user, "updated", finding.id,
+            f"{finding.title} · status open→fixed · monitör: kontrol artık geçiyor",
+        )
+        counts["resolved"] += 1
+
+    return counts
+
+
+@app.post("/monitor/run")
+def run_monitor(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Check every registered asset and reconcile the findings.
+
+    Exposed as an endpoint rather than an internal scheduler: whatever already
+    runs on a schedule here — cron, a CI job — can call it, and the run stays
+    something a person can trigger and watch.
+    """
+    assets = (
+        db.query(Asset)
+        .filter(Asset.owner_id == user.id, Asset.is_active.is_(True))
+        .all()
+    )
+
+    totals = {"created": 0, "reopened": 0, "escalated": 0, "resolved": 0,
+              "unchanged": 0, "kept_accepted": 0}
+    refused = []
+
+    for asset in assets:
+        try:
+            results = run_checks(asset.host)
+        except TargetRefused as error:
+            # A target that was allowed at registration and is refused now has
+            # changed where it points. That is worth saying out loud.
+            refused.append({"host": asset.host, "reason": str(error)})
+            continue
+
+        for key, value in _reconcile(db, user, asset.host, results).items():
+            totals[key] += value
+
+    summary = (
+        f"monitör: {len(assets)} varlık · {totals['created']} yeni "
+        f"· {totals['reopened']} yeniden açıldı · {totals['escalated']} yükseltildi "
+        f"· {totals['resolved']} kapandı · {len(refused)} reddedildi"
+    )
+    db.add(
+        AuditLog(user_id=user.id, action="monitored", detail=_sanitize_log(summary))
+    )
+    db.commit()
+
+    return {"checked": len(assets), "refused": refused, **totals}
 
 
 @app.get("/audit/me", response_model=list[AuditLogResponse])

@@ -57,8 +57,8 @@ def test_rescanning_does_not_duplicate(client):
     _post(client, [_result()])
 
     second = _post(client, [_result()]).json()
-    assert second == {"created": 0, "reopened": 0, "unchanged": 1,
-                      "kept_accepted": 0, "skipped": 0}
+    assert second == {"created": 0, "reopened": 0, "escalated": 0,
+                      "unchanged": 1, "kept_accepted": 0, "skipped": 0}
     assert len(client.get("/findings").json()) == 1
 
 
@@ -177,3 +177,12 @@ def test_info_severity_becomes_low(client):
     _post(client, [_result(severity="info")])
 
     assert client.get("/findings").json()[0]["severity"] == "low"
+
+
+def test_a_worse_rating_from_the_scanner_escalates(client):
+    """The template started rating this critical; that is a different fact."""
+    client.login_as("alice")
+    _post(client, [_result(severity="medium")])
+
+    assert _post(client, [_result(severity="critical")]).json()["escalated"] == 1
+    assert client.get("/findings").json()[0]["severity"] == "critical"

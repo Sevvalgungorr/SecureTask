@@ -39,6 +39,23 @@ class FindingResponse(FindingCreate):
     }
 
 
+class AssetCreate(BaseModel):
+    # Hostname, optionally with a port. Validated in the endpoint, where the
+    # name can actually be resolved and checked against the network policy.
+    host: str
+    label: str = ""
+
+
+class AssetResponse(AssetCreate):
+    id: int
+    is_active: bool = True
+    owner_id: int | None = None
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
 class AuditLogResponse(BaseModel):
     id: int
     created_at: datetime
