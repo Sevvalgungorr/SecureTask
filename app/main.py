@@ -4,7 +4,9 @@ from datetime import date, timedelta
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
@@ -46,7 +48,36 @@ app = FastAPI(
         "kritiklik, SLA ve denetlenebilir durum değişiklikleri."
     ),
     version="2.0.0",
+    # The stock docs page pulls Swagger UI from a public CDN, which this
+    # application's own Content-Security-Policy forbids — so it rendered blank.
+    # Replaced below with the same page served from our own files.
+    docs_url=None,
 )
+
+_STATIC = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=_STATIC), name="static")
+
+
+@app.get("/docs", include_in_schema=False)
+def swagger_ui():
+    """The API docs, served without reaching off this host.
+
+    Vendoring the assets rather than allowing the CDN in the CSP keeps the
+    exception from existing at all: a third-party script host that can serve
+    anything it likes, on a page that renders the whole API surface, is the
+    supply-chain risk this application exists to track. It also means the docs
+    work on a machine with no internet access, which is where an internal tool
+    usually lives.
+    """
+    return get_swagger_ui_html(
+        openapi_url=app.openapi_url,
+        title=f"{app.title} — API",
+        swagger_js_url="/static/vendor/swagger-ui-bundle.js",
+        swagger_css_url="/static/vendor/swagger-ui.css",
+        # Default points at fastapi.tiangolo.com, which img-src 'self' blocks.
+        swagger_favicon_url="/static/vendor/favicon.svg",
+    )
+
 
 # Holds the PKCE code_verifier between /auth/login and /callback, and ties the
 # callback to the browser that began the login. Short-lived; cleared on logout.
@@ -203,7 +234,7 @@ def _describe_changes(finding: Finding, new: FindingUpdate, user: User) -> str:
     return " · ".join([new.title, *changes])
 
 
-_FRONTEND = Path(__file__).parent / "static" / "index.html"
+_FRONTEND = _STATIC / "index.html"
 
 
 @app.get("/")
