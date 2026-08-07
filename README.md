@@ -121,7 +121,7 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 57 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 61 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -145,6 +145,13 @@ hiçbir zaman bir kritiklik seviyesi için kullanılmaz.
 FastAPI, tüm uçlar için otomatik ve interaktif bir dokümantasyon üretir — sunucu ayaktayken **`/docs`** adresinde:
 
 ![API dokümanı](docs/images/api-docs.png)
+
+Swagger arayüzü **kendi sunucumuzdan** servis edilir (`app/static/vendor/`),
+bir CDN'den değil. Sebebi ikili: uygulamanın kendi CSP başlığı dış script
+yüklemeyi zaten yasaklıyor (varsayılan sayfa bu yüzden boş geliyordu), ve tüm
+API yüzeyini gösteren bir sayfaya üçüncü taraf bir script sunucusu koymak, bu
+uygulamanın takip etmek için var olduğu tedarik zinciri riskinin ta kendisi.
+Yan fayda: dokümantasyon internetsiz bir makinede de çalışır.
 
 ## Kimlik doğrulama akışı
 
@@ -186,7 +193,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 57 test
+pytest                                      # 61 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
