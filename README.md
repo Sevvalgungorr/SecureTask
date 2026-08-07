@@ -20,7 +20,8 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Yetkisiz yönetim erişimi | `require_role("admin")` ile korunan `/admin/*` uçları | `test_findings.py::test_admin_sees_all_findings_others_forbidden` |
 | Riskin sessizce yok edilmesi (kritikliği düşürme, "risk kabul" ile kapatma) | Denetim günlüğü değişikliği açıkça yazar: `severity critical→low`, `status open→accepted_risk` | `test_audit.py::test_severity_and_status_changes_are_spelled_out` |
 | Ele geçirilmiş bir oturumun riski kabul edip kapatması | **Step-up MFA**: `accepted_risk`'e geçiş, token'daki `amr`/`acr` ile ikinci faktör kanıtlanmadıkça reddedilir (fail-closed) | `test_step_up.py` (8 test) |
-| Otomasyonun insan kararını ezmesi | İçe aktarma mevcut kritikliği **değiştirmez** ve risk kabulüne **dokunmaz**; yalnızca "düzeltildi" denip kapatılan ama hâlâ görülen bulguyu yeniden açar | `test_import.py` (15 test) |
+| Otomasyonun insan kararını ezmesi | Araçlar risk kabulüne **dokunmaz**; kritikliği yalnızca **aracın kendi değerlendirmesi yükseldiğinde** yükseltir, asla düşürmez | `test_import.py` · `test_monitor.py` |
+| İzlemenin iç ağa yönlendirilmesi (SSRF) | Hedefler önceden **kayıtlı** olmalı; ad çözümlenip **her** IP kontrol edilir, özel/loopback/link-local reddedilir — hem kayıtta hem koşuda | `test_monitor.py::test_a_private_address_is_refused_at_registration` |
 | İz silme / kaydın kaybolması | Denetim kaydı bulgudan bağımsız yaşar (FK değil), bulgu silinse bile kalır | `test_audit.py::test_audit_survives_finding_deletion` |
 | Kaba kuvvet ve kötüye kullanım | IP başına istek sınırı (rate limit), 429 | Arayüzde uyarı, manuel test |
 | Yetkisiz erişim denemesinin görünmezliği | 401/403 dönen her istek `access_denied` olarak günlüğe yazılır | Panodaki "Reddedilen erişimler" grafiği |
@@ -61,6 +62,34 @@ Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmı�
 kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
 denetim günlüğüne bir özet satırı bırakır.
 
+### İzleme
+
+```bash
+curl -X POST http://localhost:8000/assets -H "Authorization: Bearer $TOKEN" \
+     -d '{"host":"app.example.test","label":"Portal"}'
+curl -X POST http://localhost:8000/monitor/run -H "Authorization: Bearer $TOKEN"
+# {"checked":1,"created":5,"escalated":0,"reopened":0,"resolved":0,...}
+```
+
+Her varlık için üç şey kontrol edilir: **TLS sertifikasının kalan süresi**
+(30/14/0 güne göre orta/yüksek/kritik), **HTTPS erişilebilirliği** ve
+**güvenlik başlıklarının varlığı**. Hepsi salt-okunur — bir TLS el sıkışması ve
+bir GET; tarayıcının yapmayacağı hiçbir şey yapılmaz. Fuzzing, brute-force ve
+enjeksiyon denemesi yoktur: bu envanteri **izlemek**, taramak değil.
+
+Bozulan bir kontrol bulgu açar; düzelen kontrol **kendi açtığı** bulguyu
+kapatır. Elle girilmiş bir bulguyu asla kapatmaz.
+
+**SSRF koruması.** İzleme, sunucunun kullanıcı adına dışarı bağlantı kurması
+demektir — yani tam bir SSRF şekli. Bu yüzden hedef istekle birlikte gelemez:
+önce kaydedilir, kayıt sırasında **ve** her koşuda adı çözümlenip **çözümlendiği
+her IP** kontrol edilir. Özel, loopback, link-local veya ayrılmış alana düşen
+hedefler reddedilir.
+
+Ağının *içinde* çalışan bir kurulumda ise kontrol edilmesi gereken her şey
+zaten özeldir; `MONITOR_ALLOW_PRIVATE=true` bunu açar — birinin verdiği bir
+karar olarak, sessiz bir boşluk olarak değil.
+
 ### Step-up doğrulama nasıl çalışır
 
 Bir bulgunun durumu `accepted_risk`'e geçerken — yeni kayıtta da, güncellemede de —
@@ -87,11 +116,12 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
 - 📥 **Tarama çıktısı içe aktarma** — nuclei JSON/JSONL; yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
+- 📡 **İzleme** — kayıtlı varlıklarda TLS sertifikası süresi, erişilebilirlik ve güvenlik başlıkları; bozulan kontrol bulgu açar, düzelen kontrol kendi bulgusunu kapatır
 - 👤 **Kullanıcıya özel envanter** — herkes yalnızca kendi bulgularına erişir
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 39 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 57 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -156,7 +186,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 39 test
+pytest                                      # 57 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -177,6 +207,8 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `GET` | `/auth/me`, `/auth/logout` | Bearer |
 | `POST` `GET` `PUT` `DELETE` | `/findings`, `/findings/{id}` | Bearer (yalnızca sahibi) |
 | `POST` | `/import/nuclei` | Bearer (tarama çıktısı) |
+| `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
+| `POST` | `/monitor/run` | Bearer (kendi varlıkları) |
 | `GET` | `/audit/me` | Bearer (kendi geçmişi) |
 | `GET` `DELETE` | `/admin/findings`, `/admin/findings/{id}` | Yalnızca `admin` |
 | `GET` | `/admin/audit` | Yalnızca `admin` |
@@ -185,7 +217,8 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 
 ```
 Finding    id · title · description · asset · severity · status · due_date
-           source · source_ref · owner_id
+           source · source_ref · source_severity · owner_id
+Asset      id · host · label · is_active · owner_id
 User       id · username · email · oidc_issuer · oidc_sub · is_active
 AuditLog   id · created_at · user_id · action · finding_id · detail
 ```
@@ -200,6 +233,7 @@ app/
   auth.py       # OIDC giriş + token doğrulama
   models.py     # veritabanı tabloları (Finding, User, AuditLog)
   importers.py  # tarayıcı çıktısı ayrıştırma (nuclei)
+  monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı
   config.py     # ortam ayarları

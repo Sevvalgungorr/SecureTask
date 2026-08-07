@@ -58,6 +58,22 @@ OIDC_MFA_AMR = _csv(
 # and guessing one would silently weaken the check.
 OIDC_MFA_ACR = _csv("OIDC_MFA_ACR", "")
 
+# --- Monitoring -------------------------------------------------------------
+#
+# Checks are outbound connections the server makes on a user's behalf, which is
+# the shape of an SSRF. Registered targets that resolve into private, loopback,
+# link-local or reserved space are refused by default, so an internet-facing
+# instance cannot be pointed at the network behind it.
+#
+# An installation that lives *inside* the network it watches has the opposite
+# problem — everything it should check is private. Then this is switched on
+# deliberately, which is a decision someone made rather than a hole.
+MONITOR_ALLOW_PRIVATE = os.getenv("MONITOR_ALLOW_PRIVATE", "false").lower() == "true"
+
+# A check waits this long before giving up. Short: an unreachable host is a
+# finding, not a reason to hold the request open.
+MONITOR_TIMEOUT_SECONDS = float(os.getenv("MONITOR_TIMEOUT_SECONDS", "8"))
+
 # Signs the short-lived session cookie that carries the PKCE code_verifier
 # between /auth/login and /callback.
 SESSION_SECRET = _required("SESSION_SECRET")

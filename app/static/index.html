@@ -354,7 +354,7 @@
   .act.created { color: var(--ok); background: var(--ok-soft); }
   .act.updated { color: var(--warn); background: var(--accent-soft); }
   .act.deleted { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-  .act.imported { color: var(--accent); background: var(--accent-soft); }
+  .act.imported, .act.monitored { color: var(--accent); background: var(--accent-soft); }
   .act.access_denied { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .audit-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .audit-row .when { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
@@ -529,6 +529,7 @@
     <div class="tabs hidden" id="tabs">
       <button class="tab active" data-view="dash" type="button">Pano</button>
       <button class="tab" data-view="my" type="button">Bulgularım</button>
+      <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
       <button class="tab" data-view="security" type="button">Güvenlik</button>
       <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
@@ -641,6 +642,31 @@
       </div>
     </div>
 
+    <div id="assetsView" class="hidden">
+      <div class="admin-block">
+        <div class="list-head">
+          <h2>İzlenen varlıklar</h2>
+          <button class="btn sm" id="runMonitorBtn" type="button">Şimdi çalıştır</button>
+        </div>
+        <form class="add" id="assetForm">
+          <div class="fields">
+            <input id="assetHost" placeholder="Ana bilgisayar — ör. app.example.test" autocomplete="off" required>
+            <input id="assetLabel" placeholder="Etiket (isteğe bağlı)" autocomplete="off">
+          </div>
+          <button class="btn" type="submit">Ekle</button>
+        </form>
+        <ul class="findings" id="assetList"></ul>
+        <div class="empty hidden" id="assetsEmpty">
+          Henüz izlenen varlık yok.<br>Yukarıdan bir ana bilgisayar ekle.
+        </div>
+        <p class="chart-note" id="monitorNote">
+          Her varlık için TLS sertifikası süresi, erişilebilirlik ve güvenlik
+          başlıkları kontrol edilir. Bozulan bir kontrol bulgu açar, düzelen
+          kontrol kendi bulgusunu kapatır. Yalnızca okuma yapılır.
+        </p>
+      </div>
+    </div>
+
     <div id="historyView" class="hidden">
       <div class="admin-block">
         <div class="list-head"><h2>İşlem Geçmişim</h2><span class="badge">son 100</span></div>
@@ -676,6 +702,7 @@
           <li><span class="ck">✓</span> Denetim günlüğü + yetkisiz erişim kaydı</li>
           <li><span class="ck">✓</span> Kritiklik düşürme ve risk kabulü ayrıca kayda geçer</li>
           <li><span class="ck">✓</span> Risk kabulü için adım-adım doğrulama (step-up MFA)</li>
+          <li><span class="ck">✓</span> İzleme yalnızca kayıtlı varlıklara, özel ağlara kapalı (SSRF)</li>
           <li><span class="ck">✓</span> Güvenlik başlıkları (nosniff, DENY, Referrer-Policy)</li>
           <li><span class="ck">✓</span> XSS &amp; SQL injection koruması</li>
         </ul>
@@ -1011,6 +1038,90 @@ document.getElementById("importInput").onchange = async (e) => {
   }
 };
 
+// --- İzlenen varlıklar -----------------------------------------------------
+
+function assetRow(a) {
+  const li = document.createElement("li");
+  li.className = "finding";
+
+  const body = document.createElement("div");
+  body.className = "body";
+  const title = document.createElement("div");
+  title.className = "title";
+  title.textContent = a.host;                  // textContent → XSS'e kapalı
+  body.appendChild(title);
+  if (a.label) {
+    const d = document.createElement("div");
+    d.className = "desc"; d.textContent = a.label;
+    body.appendChild(d);
+  }
+
+  const del = document.createElement("button");
+  del.className = "icon-btn del-x"; del.title = "Kaldır";
+  del.innerHTML = TRASH;
+  del.onclick = async () => {
+    await api("/assets/" + a.id, { method: "DELETE" });
+    toast("Varlık kaldırıldı"); loadAssets();
+  };
+
+  li.append(body, del);
+  return li;
+}
+
+async function loadAssets() {
+  const assets = await api("/assets");
+  const list = document.getElementById("assetList");
+  document.getElementById("assetsEmpty").classList.toggle("hidden", assets.length > 0);
+  list.innerHTML = "";
+  assets.forEach(a => list.appendChild(assetRow(a)));
+}
+
+document.getElementById("assetForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const host = document.getElementById("assetHost");
+  const label = document.getElementById("assetLabel");
+  if (!host.value.trim()) return;
+  try {
+    await api("/assets", {
+      method: "POST",
+      body: JSON.stringify({ host: host.value.trim(), label: label.value.trim() }),
+    });
+    host.value = ""; label.value = "";
+    toast("Varlık eklendi"); loadAssets();
+  } catch (err) {
+    // Reddedilen bir hedefin sebebi (özel adrese çözümleniyor, zaten kayıtlı)
+    // kullanıcıya aynen gösterilir — sessizce başarısız olmaz.
+    toast(err.message);
+  }
+};
+
+document.getElementById("runMonitorBtn").onclick = async (e) => {
+  const btn = e.target;
+  btn.disabled = true;
+  const label = btn.textContent;
+  btn.textContent = "Çalışıyor…";
+  try {
+    const r = await api("/monitor/run", { method: "POST" });
+    const parts = [
+      `${r.checked} varlık kontrol edildi`,
+      r.created ? `${r.created} yeni bulgu` : "",
+      r.escalated ? `${r.escalated} yükseltildi` : "",
+      r.reopened ? `${r.reopened} yeniden açıldı` : "",
+      r.resolved ? `${r.resolved} kapandı` : "",
+    ].filter(Boolean);
+    document.getElementById("monitorNote").textContent =
+      parts.join(" · ") +
+      (r.refused.length ? ` · ${r.refused.length} hedef reddedildi: ` +
+        r.refused.map(x => x.host).join(", ") : "");
+    toast(parts.join(" · "));
+    loadFindings();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    btn.disabled = false; btn.textContent = label;
+  }
+};
+
 // --- Admin panel ---------------------------------------------------------
 
 function adminFindingRow(f) {
@@ -1058,7 +1169,7 @@ function auditRow(a) {
   act.className = "act " + a.action;
   act.textContent = {
     created: "eklendi", updated: "güncellendi", deleted: "silindi",
-    imported: "içe aktarıldı", access_denied: "reddedildi",
+    imported: "içe aktarıldı", monitored: "izlendi", access_denied: "reddedildi",
   }[a.action] || a.action;
   const what = document.createElement("span");
   what.className = "what";
@@ -1345,7 +1456,7 @@ async function loadSecurity() {
   });
 }
 
-const VIEWS = { dash: "dashView", my: "myView", history: "historyView", security: "securityView", admin: "adminView" };
+const VIEWS = { dash: "dashView", my: "myView", assets: "assetsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -1357,6 +1468,7 @@ function setupTabs() {
       // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
       if (v === "dash") loadFindings().then(loadDash).catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
+      if (v === "assets") loadAssets().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
       if (v === "security") loadSecurity().catch(() => {});
     };
