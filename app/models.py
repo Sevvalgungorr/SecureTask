@@ -24,6 +24,14 @@ CLOSED_STATUSES = ("fixed", ACCEPTED_RISK)
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
+# The longest a risk may be accepted for. Not a limit for its own sake: an
+# acceptance that never expires is how risk accumulates — someone says "for
+# now" and nobody looks again.
+MAX_ACCEPTANCE_DAYS = 90
+
+# Short enough to write, long enough that "ok" does not pass for an argument.
+MIN_ACCEPTANCE_REASON = 15
+
 
 class Finding(Base):
     """A security finding: something wrong on an asset, and its remediation."""
@@ -52,6 +60,18 @@ class Finding(Base):
     # The scanner's own identifier for the rule that fired (nuclei's
     # template-id). Empty for anything typed in by hand.
     source_ref = Column(String(255), nullable=False, server_default="")
+    # --- The risk acceptance, when there is one ---------------------------
+    #
+    # Accepting a risk is the only decision here that leaves a known hole open
+    # on purpose, so it is the only one that has to be argued for, owned, and
+    # given an end. These are cleared when the acceptance ends; the audit log
+    # keeps the history.
+    accepted_reason = Column(String(2000))
+    # No acceptance is permanent. Past this date the finding reopens by itself.
+    accepted_until = Column(Date)
+    accepted_at = Column(DateTime(timezone=True))
+    accepted_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+
     # What the source last rated this, as opposed to what the row now says.
     # Keeping the two apart is what lets a re-run tell "the evidence got worse"
     # (the source's rating rose) from "a person disagreed with the tool" (the
@@ -137,6 +157,12 @@ class AuditLog(Base):
         index=True,
     )
     action = Column(String(20), nullable=False)  # created / updated / deleted
+    # Tamper-evidence. Each entry hashes its own contents together with the
+    # previous entry's hash, so the log can only be appended to: editing or
+    # removing any row breaks every hash after it, and the break is findable.
+    # Storage that lets an admin edit rows is exactly the case this is for.
+    prev_hash = Column(String(64), nullable=False, server_default="")
+    entry_hash = Column(String(64), nullable=False, server_default="")
     # Not a foreign key: the referenced finding may already be deleted, and the
     # log must still record which id it was.
     finding_id = Column(Integer, index=True)

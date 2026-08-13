@@ -4,6 +4,9 @@ Fixing a finding removes the problem; accepting its risk leaves the problem in
 place by decision. So that transition asks for a second factor even though the
 session is already authenticated.
 """
+from datetime import date, timedelta
+
+REASON = "Sağlayıcı yaması çıkana kadar ağ tarafında sınırlandırıldı"
 
 
 def _payload(**fields):
@@ -14,9 +17,21 @@ def _payload(**fields):
         "severity": "high",
         "status": "open",
         "due_date": None,
+        "accepted_reason": None,
+        "accepted_until": None,
     }
     payload.update(fields)
     return payload
+
+
+def _accepted(**fields):
+    """A complete acceptance: the guard under test is MFA, not the paperwork."""
+    return _payload(
+        status="accepted_risk",
+        accepted_reason=REASON,
+        accepted_until=str(date.today() + timedelta(days=30)),
+        **fields,
+    )
 
 
 def _create(client, **fields):
@@ -39,7 +54,7 @@ def test_accepting_risk_with_mfa_is_allowed_and_logged(client):
     client.login_as("alice", amr=["pwd", "otp"])
     finding_id = _create(client).json()["id"]
 
-    res = client.put(f"/findings/{finding_id}", json=_payload(status="accepted_risk"))
+    res = client.put(f"/findings/{finding_id}", json=_accepted())
     assert res.status_code == 200
     assert res.json()["status"] == "accepted_risk"
 
@@ -57,7 +72,7 @@ def test_acr_also_counts_when_configured(client, monkeypatch):
     client.login_as("alice", amr=["pwd"], acr="level2")
     finding_id = _create(client).json()["id"]
 
-    res = client.put(f"/findings/{finding_id}", json=_payload(status="accepted_risk"))
+    res = client.put(f"/findings/{finding_id}", json=_accepted())
     assert res.status_code == 200
 
 
@@ -76,7 +91,10 @@ def test_creating_a_finding_as_accepted_needs_mfa_too(client):
     assert _create(client, status="accepted_risk").status_code == 403
 
     client.login_as("bob", amr=["mfa"])
-    assert _create(client, status="accepted_risk").status_code == 200
+    assert _create(
+        client, status="accepted_risk", accepted_reason=REASON,
+        accepted_until=str(date.today() + timedelta(days=30)),
+    ).status_code == 200
 
 
 def test_other_transitions_do_not_require_mfa(client):
@@ -92,14 +110,17 @@ def test_other_transitions_do_not_require_mfa(client):
 def test_editing_an_already_accepted_finding_stays_open(client):
     """Only the transition is guarded, not every later edit of the row."""
     user = client.login_as("alice", amr=["otp"])
-    finding_id = _create(client, status="accepted_risk").json()["id"]
+    finding_id = _create(
+        client, status="accepted_risk", accepted_reason=REASON,
+        accepted_until=str(date.today() + timedelta(days=30)),
+    ).json()["id"]
 
     # Same identity, weaker session: the second factor is gone from the token.
     user.amr = ["pwd"]
 
     res = client.put(
         f"/findings/{finding_id}",
-        json=_payload(status="accepted_risk", title="Eski TLS — gerekçe eklendi"),
+        json=_accepted(title="Eski TLS — gerekçe eklendi"),
     )
     assert res.status_code == 200
     assert res.json()["title"] == "Eski TLS — gerekçe eklendi"

@@ -15,15 +15,14 @@ class FindingCreate(BaseModel):
     status: Status = "open"
     # Left unset, the server derives it from severity (models.SLA_DAYS).
     due_date: date | None = None
+    # Required when the status is accepted_risk, refused otherwise — checked in
+    # the endpoint, where the date can be compared against today.
+    accepted_reason: str | None = None
+    accepted_until: date | None = None
 
 
-class FindingUpdate(BaseModel):
-    title: str
-    description: str | None = None
-    asset: str = ""
-    severity: Severity = "medium"
-    status: Status = "open"
-    due_date: date | None = None
+class FindingUpdate(FindingCreate):
+    pass
 
 
 class FindingResponse(FindingCreate):
@@ -33,6 +32,10 @@ class FindingResponse(FindingCreate):
     # Only the import endpoint sets these.
     source: str = "manual"
     source_ref: str = ""
+    # Who accepted the risk and when. Set by the server from the session that
+    # cleared step-up; a client cannot name someone else as the approver.
+    accepted_at: datetime | None = None
+    accepted_by_id: int | None = None
 
     model_config = {
         "from_attributes": True

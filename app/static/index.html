@@ -354,7 +354,7 @@
   .act.created { color: var(--ok); background: var(--ok-soft); }
   .act.updated { color: var(--warn); background: var(--accent-soft); }
   .act.deleted { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
-  .act.imported, .act.monitored { color: var(--accent); background: var(--accent-soft); }
+  .act.imported, .act.monitored, .act.expired { color: var(--accent); background: var(--accent-soft); }
   .act.access_denied { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .audit-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .audit-row .when { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
@@ -425,6 +425,41 @@
     margin: 1.05rem 0 0; font-size: .78rem; color: var(--faint);
   }
   .login-card .fine svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+  /* Risk kabul diyaloğu. Bir riski kabul etmek, arayüzde de tek tıkla
+     olmamalı: gerekçe ve bitiş tarihi karşına çıkar. */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: color-mix(in srgb, #000 45%, transparent);
+    display: grid; place-items: center; padding: 1rem; z-index: 60;
+  }
+  .modal {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: var(--sh-lg); padding: 1.4rem; width: min(30rem, 100%);
+  }
+  .modal h3 { margin: 0 0 .3rem; font-size: 1.05rem; letter-spacing: -.02em; }
+  .modal .why { color: var(--muted); font-size: .86rem; margin: 0 0 1.1rem; }
+  .modal label { display: block; font-size: .78rem; font-weight: 700; color: var(--muted); margin-bottom: .3rem; }
+  .modal textarea, .modal input[type=date] {
+    font: inherit; width: 100%; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: .55rem .65rem; outline: none;
+  }
+  .modal textarea { min-height: 5.5rem; resize: vertical; }
+  .modal textarea:focus, .modal input[type=date]:focus { border-color: var(--accent); }
+  .modal .field { margin-bottom: 1rem; }
+  .modal .hint { font-size: .76rem; color: var(--faint); margin: .3rem 0 0; }
+  .modal .err { font-size: .8rem; color: var(--danger); margin: 0 0 .8rem; min-height: 1.1em; }
+  .modal .row { display: flex; gap: .5rem; justify-content: flex-end; }
+
+  /* Kabul edilmiş bir bulgunun taşıdığı karar, satırda görünür durur. */
+  .accepted-note {
+    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+    border-left: 2px solid var(--sev-3); padding-left: .55rem;
+  }
+  .accepted-note b { color: var(--ink); font-weight: 600; }
+
+  .chain { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-size: .86rem; }
+  .chain .ok { color: var(--ok); font-weight: 700; }
+  .chain .bad { color: var(--danger); font-weight: 700; }
 
   .toast {
     position: fixed; bottom: 1.4rem; left: 50%; transform: translateX(-50%) translateY(10px);
@@ -629,6 +664,8 @@
 
       <div class="list-head">
         <h2>Bulgular</h2>
+        <button class="btn ghost sm" id="expireBtn" type="button"
+                title="Süresi dolmuş risk kabullerini yeniden açar">Süresi dolanları denetle</button>
         <div class="filters" id="filters">
           <button class="chip active" data-f="all" type="button">Tümü</button>
           <button class="chip" data-f="open" type="button">Açık</button>
@@ -703,6 +740,7 @@
           <li><span class="ck">✓</span> Kritiklik düşürme ve risk kabulü ayrıca kayda geçer</li>
           <li><span class="ck">✓</span> Risk kabulü için adım-adım doğrulama (step-up MFA)</li>
           <li><span class="ck">✓</span> İzleme yalnızca kayıtlı varlıklara, özel ağlara kapalı (SSRF)</li>
+          <li><span class="ck">✓</span> Denetim günlüğü hash zinciriyle korunuyor — sessizce değiştirilemez</li>
           <li><span class="ck">✓</span> Güvenlik başlıkları (nosniff, DENY, Referrer-Policy)</li>
           <li><span class="ck">✓</span> XSS &amp; SQL injection koruması</li>
         </ul>
@@ -715,7 +753,14 @@
         <ul class="findings" id="allFindings"></ul>
       </div>
       <div class="admin-block">
-        <div class="list-head"><h2>Denetim Günlüğü</h2><span class="badge">son 100</span></div>
+        <div class="list-head">
+          <h2>Denetim Günlüğü</h2>
+          <button class="btn ghost sm" id="verifyBtn" type="button">Zinciri doğrula</button>
+        </div>
+        <p class="chain" id="chainResult">
+          Her kayıt, kendinden öncekinin özetini taşır. Bir satır değiştirilir ya da
+          silinirse zincir kırılır ve nerede kırıldığı bulunur.
+        </p>
         <ul class="audit" id="auditList"></ul>
       </div>
     </div>
@@ -827,6 +872,80 @@ function findingMeta(f) {
   return meta;
 }
 
+const MAX_ACCEPTANCE_DAYS = 90;
+
+function addDays(n) {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+// Riski kabul etmek için gerekçe ve bitiş tarihi ister. Sunucu zaten ikisini de
+// zorunlu tutuyor; buradaki amaç kullanıcıyı hatayla karşılaştırmak değil,
+// kararı verirken düşündürmek. Bir promise döner: {reason, until} ya da null.
+function askAcceptance(f) {
+  return new Promise(resolve => {
+    const back = document.createElement("div");
+    back.className = "modal-backdrop";
+
+    const box = document.createElement("div");
+    box.className = "modal";
+
+    const h = document.createElement("h3");
+    h.textContent = "Riski kabul et";
+    const why = document.createElement("p");
+    why.className = "why";
+    why.textContent =
+      "Bu bulgu açık kalacak. Neden bu riskle yaşadığınız ve ne zamana kadar " +
+      "kabul edildiği kayda geçer; süre dolunca bulgu kendiliğinden yeniden açılır.";
+
+    const err = document.createElement("p");
+    err.className = "err";
+
+    const f1 = document.createElement("div"); f1.className = "field";
+    const l1 = document.createElement("label"); l1.textContent = "Gerekçe";
+    const reason = document.createElement("textarea");
+    reason.placeholder = "Ör: Sağlayıcı yaması çıkana kadar ağ tarafında sınırlandırıldı";
+    f1.append(l1, reason);
+
+    const f2 = document.createElement("div"); f2.className = "field";
+    const l2 = document.createElement("label"); l2.textContent = "Bitiş tarihi";
+    const until = document.createElement("input");
+    until.type = "date";
+    until.value = addDays(30);
+    until.min = addDays(1);
+    until.max = addDays(MAX_ACCEPTANCE_DAYS);
+    const hint = document.createElement("p");
+    hint.className = "hint";
+    hint.textContent = `En fazla ${MAX_ACCEPTANCE_DAYS} gün. Sonsuza kadar kabul yoktur.`;
+    f2.append(l2, until, hint);
+
+    const row = document.createElement("div"); row.className = "row";
+    const cancel = document.createElement("button");
+    cancel.className = "btn ghost sm"; cancel.type = "button"; cancel.textContent = "Vazgeç";
+    const ok = document.createElement("button");
+    ok.className = "btn sm"; ok.type = "button"; ok.textContent = "Kabul et";
+    row.append(cancel, ok);
+
+    const close = value => { back.remove(); document.removeEventListener("keydown", onKey); resolve(value); };
+    const onKey = e => { if (e.key === "Escape") close(null); };
+
+    cancel.onclick = () => close(null);
+    back.onclick = e => { if (e.target === back) close(null); };
+    document.addEventListener("keydown", onKey);
+    ok.onclick = () => {
+      const text = reason.value.trim();
+      if (text.length < 15) { err.textContent = "Gerekçe en az 15 karakter olmalı."; reason.focus(); return; }
+      if (!until.value) { err.textContent = "Bir bitiş tarihi seç."; return; }
+      close({ reason: text, until: until.value });
+    };
+
+    box.append(h, why, err, f1, f2, row);
+    back.appendChild(box);
+    document.body.appendChild(back);
+    reason.focus();
+  });
+}
+
 // The row's own status control. Changing it PUTs the finding, so the change
 // lands in the audit log the same way any other edit does.
 function stateSelect(f, after) {
@@ -847,8 +966,14 @@ function stateSelect(f, after) {
     sel.appendChild(opt);
   });
   sel.onchange = async () => {
+    let extra = {};
+    if (sel.value === "accepted_risk") {
+      const answer = await askAcceptance(f);
+      if (!answer) { after(); return; }        // vazgeçildi: seçim geri alınır
+      extra = { accepted_reason: answer.reason, accepted_until: answer.until };
+    }
     try {
-      await saveFinding({ ...f, status: sel.value });
+      await saveFinding({ ...f, status: sel.value, ...extra });
       toast("Durum: " + STATUS_LABEL[sel.value]);
     } catch (e) {
       // Reddedilirse listeyi tazelemek seçimi eski durumuna geri alır.
@@ -885,6 +1010,15 @@ function findingRow(f) {
     body.appendChild(d);
   }
   body.appendChild(findingMeta(f));
+  if (f.status === "accepted_risk" && f.accepted_reason) {
+    const note = document.createElement("div");
+    note.className = "accepted-note";
+    const label = document.createElement("b");
+    label.textContent = "Risk kabul — " + fmtDate(f.accepted_until) + "'e kadar: ";
+    note.appendChild(label);
+    note.appendChild(document.createTextNode(f.accepted_reason));
+    body.appendChild(note);
+  }
 
   const actions = document.createElement("div");
   actions.className = "actions";
@@ -912,6 +1046,10 @@ function saveFinding(f) {
       severity: f.severity,
       status: f.status,
       due_date: f.due_date,
+      // Tam gövde gönderiliyor: eksik bırakmak kabulün gerekçesini ve süresini
+      // sessizce silerdi.
+      accepted_reason: f.accepted_reason || null,
+      accepted_until: f.accepted_until || null,
     }),
   });
 }
@@ -1036,6 +1174,34 @@ document.getElementById("importInput").onchange = async (e) => {
     label.textContent = "Dosya seç…";
     e.target.value = "";     // aynı dosya tekrar seçilebilsin
   }
+};
+
+document.getElementById("expireBtn").onclick = async (e) => {
+  const btn = e.target; btn.disabled = true;
+  try {
+    const r = await api("/risk/expire", { method: "POST" });
+    toast(r.reopened
+      ? `${r.reopened} risk kabulünün süresi doldu, bulgu yeniden açıldı`
+      : "Süresi dolmuş risk kabulü yok");
+    loadFindings();
+  } catch (err) { toast(err.message); } finally { btn.disabled = false; }
+};
+
+document.getElementById("verifyBtn").onclick = async (e) => {
+  const btn = e.target; btn.disabled = true;
+  const out = document.getElementById("chainResult");
+  try {
+    const r = await api("/admin/audit/verify");
+    out.innerHTML = "";
+    const mark = document.createElement("span");
+    mark.className = r.ok ? "ok" : "bad";
+    mark.textContent = r.ok ? "✓ Zincir sağlam" : "✗ Zincir kırık";
+    const detail = document.createElement("span");
+    detail.textContent = r.ok
+      ? `${r.checked} kayıt doğrulandı, hiçbiri değiştirilmemiş.`
+      : `#${r.broken_at} numaralı kayıtta: ${r.reason}`;
+    out.append(mark, detail);
+  } catch (err) { toast(err.message); } finally { btn.disabled = false; }
 };
 
 // --- İzlenen varlıklar -----------------------------------------------------
@@ -1169,7 +1335,8 @@ function auditRow(a) {
   act.className = "act " + a.action;
   act.textContent = {
     created: "eklendi", updated: "güncellendi", deleted: "silindi",
-    imported: "içe aktarıldı", monitored: "izlendi", access_denied: "reddedildi",
+    imported: "içe aktarıldı", monitored: "izlendi", expired: "süresi doldu",
+    access_denied: "reddedildi",
   }[a.action] || a.action;
   const what = document.createElement("span");
   what.className = "what";

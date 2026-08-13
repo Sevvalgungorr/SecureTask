@@ -1,4 +1,7 @@
 """Audit logging and the per-user history endpoint."""
+from datetime import date, timedelta
+
+REASON = "Sağlayıcı yaması çıkana kadar ağ tarafında sınırlandırıldı"
 
 
 def _edit(client, finding_id, **fields):
@@ -9,6 +12,8 @@ def _edit(client, finding_id, **fields):
         "severity": "medium",
         "status": "open",
         "due_date": None,
+        "accepted_reason": None,
+        "accepted_until": None,
     }
     payload.update(fields)
     return client.put(f"/findings/{finding_id}", json=payload)
@@ -36,7 +41,10 @@ def test_severity_and_status_changes_are_spelled_out(client):
     finding_id = client.post(
         "/findings", json={"title": "Track me", "severity": "critical"}
     ).json()["id"]
-    _edit(client, finding_id, severity="low", status="accepted_risk")
+    _edit(
+        client, finding_id, severity="low", status="accepted_risk",
+        accepted_reason=REASON, accepted_until=str(date.today() + timedelta(days=30)),
+    )
 
     entry = next(
         e for e in client.get("/admin/audit").json() if e["action"] == "updated"
