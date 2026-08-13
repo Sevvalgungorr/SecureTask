@@ -2,9 +2,22 @@
 
 ![CI](https://github.com/Sevvalgungorr/SecureTask/actions/workflows/ci.yml/badge.svg)
 
-Güvenlik bulgusu takip uygulaması: hangi sistemde ne bulundu, ne kadar kritik, ne zamana kadar kapatılmalı. FastAPI ile yazılmış REST API + web arayüzü. Kullanıcılar kimlik sağlayıcı (OIDC) üzerinden giriş yapar, yalnızca kendi bulgularını görür; yöneticiler tüm bulguları ve denetim günlüğünü görebilir.
+Güvenlik bulgusu takip uygulaması: hangi sistemde ne bulundu, ne kadar kritik, ne zamana kadar kapatılmalı. FastAPI ile yazılmış REST API + web arayüzü. Kullanıcılar kimlik sağlayıcı (OIDC) üzerinden giriş yapar; herkes kendi bulgularını ve ekiplerinin bulgularını görür. Bir bulgunun riskini kabul etmek — yani sorunu yerinde bırakıp kapatmak — ayrı bir roldür ve bulguyu bildiren kişiye kapalıdır.
 
 Bir açık envanteri hassas veridir — hangi sistemin nesinin kırık olduğunu tarif eder. Bu yüzden uygulamanın asıl konusu listenin kendisi değil, **ona kimin eriştiği ve kimin ne değiştirdiği**: kimlik doğrulama, yetkilendirme ve denetlenebilirlik.
+
+## Senaryo
+
+Bir güvenlik ekibinin bir haftası:
+
+1. **Ahmet** `portal.example.test` üzerinde kimlik doğrulaması istemeyen bir yönetim ucu bulur, ekibe bir bulgu açar. Kritik olduğu için SLA'sı 7 gün.
+2. Gece çalışan tarama ve izleme, aynı ekibe kendi bulgularını ekler; hafta ortasında biri düzeltildi diye kapatılan bir bulguyu **yeniden açar**, çünkü tarayıcı onu hâlâ görüyordur.
+3. **Şevval** bulguyu triyaj eder ve sistemin sahibine atar; kim ilgileniyor artık listede yazıyordur.
+4. Yama sağlayıcıdan gelmeyince ekip "bununla yaşayacağız" der. Bunu Ahmet **yapamaz** — bulguyu bildiren kişi kendi bulgusunun riskini kabul edemez. Kabulü ekibin risk sahibi Şevval verir: ikinci faktörle, yazılı gerekçeyle ve bir bitiş tarihiyle.
+5. Otuz gün sonra süre dolar, bulgu **kendiliğinden yeniden açılır**. Karar devralınmaz; yeniden verilmek zorundadır.
+6. Denetimde "kim, neyi, ne zaman, hangi gerekçeyle" sorusunun cevabı günlüktedir — ve günlüğün sonradan değiştirilmediği hash zinciriyle gösterilebilir.
+
+Uygulamanın tamamı bu altı adımı taşımak için var.
 
 ![Giriş ekranı](docs/images/login.png)
 
@@ -16,7 +29,8 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | --- | --- | --- |
 | Parolanın uygulamaya girilmesi / çalınması | OIDC ile SSO — parola yalnızca sağlayıcıya girilir, PKCE (S256) | Uçtan uca giriş akışı, `test_logout.py` |
 | Sahte veya kurcalanmış token | `id_token`/erişim token'ı JWKS ile yerel doğrulama (RS256 sabitlenmiş) | Manuel pentest: forge/tamper → 401 |
-| Başkasının bulgu envanterini okuma (IDOR) | Her sorgu `owner_id` ile sınırlı; sahibi olmayan kayıt **404** döner, 403 değil | `test_findings.py::test_findings_are_isolated_per_user` |
+| Başkasının bulgu envanterini okuma (IDOR) | Her sorgu kişinin **kendi** ve **ekiplerinin** bulgularıyla sınırlı; dışarıdaki kayıt **404** döner, 403 değil | `test_findings.py::test_findings_are_isolated_per_user` · `test_teams.py::test_someone_outside_the_team_sees_nothing` |
+| Riski bildirenin kendi kararını onaylaması | **Görev ayrılığı**: bir bulgunun riskini yalnızca ekibin `risk_owner` rolündeki biri kabul edebilir — ve o kişi bulguyu **bildiren** olamaz | `test_teams.py::test_the_reporter_cannot_accept_their_own_finding` |
 | Yetkisiz yönetim erişimi | `require_role("admin")` ile korunan `/admin/*` uçları | `test_findings.py::test_admin_sees_all_findings_others_forbidden` |
 | Riskin sessizce yok edilmesi (kritikliği düşürme, "risk kabul" ile kapatma) | Denetim günlüğü değişikliği açıkça yazar: `severity critical→low`, `status open→accepted_risk` | `test_audit.py::test_severity_and_status_changes_are_spelled_out` |
 | Ele geçirilmiş bir oturumun riski kabul edip kapatması | **Step-up MFA**: `accepted_risk`'e geçiş, token'daki `amr`/`acr` ile ikinci faktör kanıtlanmadıkça reddedilir (fail-closed) | `test_step_up.py` (8 test) |
@@ -33,7 +47,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
 | Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
 
-**Kapsam dışı (bilinçli):** çok kiracılı (multi-tenant) izolasyon, bulgu paylaşımı,
+**Kapsam dışı (bilinçli):** çok kiracılı (multi-tenant) izolasyon,
 şifreli alan bazlı depolama, token iptali kontrolü (introspection). Sonuncusu
 bilinen bir açık: token JWKS ile *yerel* doğrulandığı için, sağlayıcıda oturum
 iptal edilse bile token süresi dolana kadar geçerli kalır.
@@ -49,7 +63,8 @@ curl -X POST http://localhost:8000/import/nuclei \
 
 Hem JSON dizisi hem satır-başına-nesne (JSONL) kabul edilir; bozuk bir satır
 taramanın geri kalanını kaybettirmez, sayılır. Aynı hedef ikinci kez taranınca
-kopya oluşmaz: eşleşme `(sahip, varlık, template-id)` üzerinden yapılır.
+kopya oluşmaz: eşleşme `(ekip ya da sahip, varlık, template-id)` üzerinden yapılır —
+bir ekibe aktarılan tarama, aynı çıktıyı iki kişi yüklese de tek bulgu üretir.
 
 **Bir tarama iş ekleyebilir ve işin bitmediğini kanıtlayabilir; bir kararı silemez:**
 
@@ -109,6 +124,41 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 `mfa doğrulandı` olarak yazılır; reddedilen deneme ise 403 olduğu için
 `access_denied` kaydına düşer ve panodaki grafikte görünür.
 
+### Ekip: kontrollerin anlam kazandığı yer
+
+Buradaki her kontrol birini kısıtlar — ikinci faktör, yazılı gerekçe, zincirli
+günlük. Listeyi tek başına tutan biri için kısıtlanacak kimse yoktur: bulan,
+düzelten ve kabul eden aynı kişidir ve kontroller tören hâline gelir. Ekip, o
+odaya ikinci kişiyi koyar.
+
+| Rol | Yapabildiği |
+| --- | --- |
+| `member` | Bulgu açar, triyaj eder, üstlenir, düzeltir; ekibin bütün bulgularını görür |
+| `risk_owner` | Bunlara ek olarak **riski kabul edebilir**, üye ekler/çıkarır, ekipteki her bulguyu silebilir |
+
+**Görev ayrılığı (separation of duties).** Bir bulgunun riskini kabul etmek,
+sorunu yerinde bırakıp bulguyu kapatmak demektir; bu yüzden iki kişiye
+bölünmeye en değer karar odur. Bir şeyin önemli olduğunu söyleyen kişinin, aynı
+şeyin kabul edilebilir olduğuna da karar vermesi, o kararın kaydını değersiz
+kılar. Kural üç katmanlıdır ve hepsi birden sağlanmalıdır:
+
+1. Oturum ikinci faktörden geçmiş olmalı (step-up MFA)
+2. Kabul eden, o ekipte `risk_owner` olmalı
+3. Kabul eden, bulguyu **bildiren kişi olmamalı**
+
+Ekipsiz (kişisel) bir bulgu bu kuralın dışındadır — bir muafiyet olarak değil,
+bir kişi iki kişi olamadığı için: tek kişilik bir listede sorulacak ikinci
+kişi yoktur. Reddedilen her kabul denemesi 403 döner, yani `access_denied`
+olarak günlüğe düşer ve panodaki grafikte görünür.
+
+**Atama** kendi ucundan gider (`PUT /findings/{id}/assignee`): bir başlık
+düzeltmesinin yan etkisi olarak birinin işi başkasına devredilmemeli. Atanan
+kişi ekibin üyesi olmak zorundadır — göremeyeceği bir işi kimseye veremezsiniz.
+
+Tarama ve izleme de bir ekibe iş açabilir (`?team_id=`): sonuç, tarayıcıyı
+çalıştıran kişinin değil, işi yapacak ekibindir — aynı çıktıyı iki kişi
+yüklediğinde aynı bulgudan iki kopya oluşmaz.
+
 ### Risk kabulü: gerekçe, sahip ve bitiş
 
 Bir riski kabul etmek bulguyu kapatır — ama "düzeltildi" ile aynı şey değildir:
@@ -163,16 +213,18 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🔎 **Bulgu kaydı** — başlık, kanıt, **varlık**, kritiklik, durum
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
+- 👥 **Ekip ve atama** — bulgu bir ekibe ait olur, ekipteki herkes görür, biri üstlenir; kimin ilgilendiği listede yazar
+- ⚖️ **Görev ayrılığı** — riski yalnızca ekibin risk sahibi kabul edebilir ve o kişi bulguyu bildiren olamaz
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
 - 📝 **Risk kabul kütüğü** — gerekçe ve bitiş tarihi zorunlu (en fazla 90 gün); süre dolunca bulgu kendiliğinden yeniden açılır
 - 📥 **Tarama çıktısı içe aktarma** — nuclei JSON/JSONL; yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
 - 📡 **İzleme** — kayıtlı varlıklarda TLS sertifikası süresi, erişilebilirlik ve güvenlik başlıkları; bozulan kontrol bulgu açar, düzelen kontrol kendi bulgusunu kapatır
-- 👤 **Kullanıcıya özel envanter** — herkes yalnızca kendi bulgularına erişir
+- 👤 **Kapsamlı erişim** — herkes kendi bulgularını ve ekiplerinin bulgularını görür, başkasınınkini değil
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 81 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 105 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -244,7 +296,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 81 test
+pytest                                      # 105 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -263,10 +315,13 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | --- | --- | --- |
 | `GET` | `/auth/login`, `/callback` | Giriş akışı |
 | `GET` | `/auth/me`, `/auth/logout` | Bearer |
-| `POST` `GET` `PUT` `DELETE` | `/findings`, `/findings/{id}` | Bearer (yalnızca sahibi) |
-| `POST` | `/import/nuclei` | Bearer (tarama çıktısı) |
+| `POST` `GET` `PUT` `DELETE` | `/findings`, `/findings/{id}` | Bearer (kendi + ekibininkiler) |
+| `PUT` | `/findings/{id}/assignee` | Bearer (ekip üyesi) |
+| `POST` `GET` | `/teams` | Bearer |
+| `POST` `DELETE` | `/teams/{id}/members`, `/teams/{id}/members/{user_id}` | Yalnızca `risk_owner` |
+| `POST` | `/import/nuclei` (`?team_id=`) | Bearer (tarama çıktısı) |
 | `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
-| `POST` | `/monitor/run` | Bearer (kendi varlıkları) |
+| `POST` | `/monitor/run` (`?team_id=`) | Bearer (kendi varlıkları) |
 | `POST` | `/risk/expire` | Bearer (süresi dolan kabulleri yeniden açar) |
 | `GET` | `/audit/me` | Bearer (kendi geçmişi) |
 | `GET` `DELETE` | `/admin/findings`, `/admin/findings/{id}` | Yalnızca `admin` |
@@ -277,15 +332,20 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 
 ```
 Finding    id · title · description · asset · severity · status · due_date
-           source · source_ref · source_severity · owner_id
+           source · source_ref · source_severity
+           owner_id (bildiren) · team_id · assignee_id
            accepted_reason · accepted_until · accepted_at · accepted_by_id
+Team       id · name · created_at · created_by_id
+TeamMember id · team_id · user_id · role
 Asset      id · host · label · is_active · owner_id
 User       id · username · email · oidc_issuer · oidc_sub · is_active
 AuditLog   id · created_at · user_id · action · finding_id · detail
            prev_hash · entry_hash
 ```
 
-`severity` ∈ {low, medium, high, critical} · `status` ∈ {open, triaged, fixed, accepted_risk}
+`severity` ∈ {low, medium, high, critical} · `status` ∈ {open, triaged, fixed, accepted_risk} · `role` ∈ {member, risk_owner}
+
+`owner_id` bildiren kişidir — bulgunun sahibi değil, riskini kabul etmesi **yasak** olan kişi.
 
 ## Proje yapısı
 
@@ -293,7 +353,7 @@ AuditLog   id · created_at · user_id · action · finding_id · detail
 app/
   main.py       # API uçları
   auth.py       # OIDC giriş + token doğrulama
-  models.py     # veritabanı tabloları (Finding, User, AuditLog)
+  models.py     # veritabanı tabloları (Finding, Team, TeamMember, User, AuditLog)
   audit.py      # denetim günlüğü: ekleme-yalnız hash zinciri + doğrulama
   importers.py  # tarayıcı çıktısı ayrıştırma (nuclei)
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması

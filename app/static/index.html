@@ -205,6 +205,16 @@
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 100%; overflow: hidden;
     text-overflow: ellipsis; white-space: nowrap;
   }
+  /* Whose finding this is, in the sense that matters: who can see it and who
+     is expected to act. An unassigned team finding says so rather than looking
+     like nobody's problem by omission. */
+  .team-chip {
+    font-size: .72rem; font-weight: 700; color: var(--accent);
+    background: var(--accent-soft); border-radius: 999px; padding: .08rem .5rem; flex-shrink: 0;
+  }
+  .assignee { font-size: .74rem; color: var(--muted); }
+  .assignee.none { font-style: italic; opacity: .8; }
+
   .due { display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .due svg { width: 12px; height: 12px; }
   /* Reserved status colour: a missed remediation deadline, not a severity. */
@@ -246,6 +256,40 @@
     cursor: pointer; flex-shrink: 0; max-width: 8.5rem;
   }
   .state-select:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Deliberately quieter than the state control: handing work to someone is a
+     smaller act than deciding a finding's outcome. */
+  .assign-select {
+    font: inherit; font-size: .74rem; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 8px; padding: .2rem .35rem;
+    cursor: pointer; max-width: 7.5rem;
+  }
+  .assign-select:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* --- Ekipler --- */
+  .team-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: .85rem .9rem; box-shadow: var(--sh-sm); margin-bottom: .6rem;
+  }
+  .team-head { display: flex; align-items: center; gap: .5rem; }
+  .team-head b { font-size: .98rem; }
+  .members { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+  .member {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .78rem;
+    background: var(--line-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: .16rem .3rem .16rem .6rem;
+  }
+  .member small { color: var(--muted); font-size: .68rem; }
+  /* The one role that can close a finding without solving it is marked. */
+  .member.owner { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .member.owner small { color: var(--accent); font-weight: 700; }
+  .member .icon-btn { width: 20px; height: 20px; }
+  .member .icon-btn svg { width: 12px; height: 12px; }
+  .add-member { display: flex; gap: .4rem; margin-top: .7rem; flex-wrap: wrap; }
+  .add-member input {
+    flex: 1; min-width: 12rem; font: inherit; font-size: .82rem; padding: .35rem .6rem;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink);
+  }
+  .add-member input:focus { outline: none; border-color: var(--accent); }
   .body { flex: 1; min-width: 0; }
   .title { font-weight: 600; word-break: break-word; }
   li.finding.closed .title { text-decoration: line-through; color: var(--muted); }
@@ -565,6 +609,7 @@
       <button class="tab active" data-view="dash" type="button">Pano</button>
       <button class="tab" data-view="my" type="button">Bulgularım</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
+      <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
       <button class="tab" data-view="security" type="button">Güvenlik</button>
       <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
@@ -648,6 +693,9 @@
               <option value="critical">Kritik</option>
             </select>
             <input id="dueInput" type="date" class="mini-date" title="SLA tarihi — boş bırakılırsa kritikliğe göre hesaplanır">
+            <select id="teamInput" class="mini-select" title="Bu bulguyu kim görecek">
+              <option value="">Kişisel</option>
+            </select>
           </div>
         </div>
         <button class="btn" type="submit">Ekle</button>
@@ -700,6 +748,29 @@
           Her varlık için TLS sertifikası süresi, erişilebilirlik ve güvenlik
           başlıkları kontrol edilir. Bozulan bir kontrol bulgu açar, düzelen
           kontrol kendi bulgusunu kapatır. Yalnızca okuma yapılır.
+        </p>
+      </div>
+    </div>
+
+    <div id="teamsView" class="hidden">
+      <div class="admin-block">
+        <div class="list-head"><h2>Ekipler</h2></div>
+        <form class="add" id="teamForm">
+          <div class="fields">
+            <input id="teamName" placeholder="Ekip adı — ör. Altyapı Güvenliği" autocomplete="off" required>
+          </div>
+          <button class="btn" type="submit">Ekip kur</button>
+        </form>
+        <div id="teamList"></div>
+        <div class="empty hidden" id="teamsEmpty">
+          Henüz bir ekipte değilsin.<br>Bir ekip kur ya da bir risk sahibinden seni eklemesini iste.
+        </div>
+        <p class="chart-note">
+          Bir bulguyu ekibe verdiğinde ekipteki herkes görür ve üzerinde çalışabilir.
+          Riski kabul etmek — yani sorunu yerinde bırakıp bulguyu kapatmak — yalnızca
+          <b>risk sahibi</b> rolündeki birinin yapabileceği iştir ve o kişi bulguyu
+          <b>bildiren kişi olamaz</b>. Bir şeyin önemli olduğunu söyleyen, aynı şeyin
+          kabul edilebilir olduğuna da karar veremez.
         </p>
       </div>
     </div>
@@ -840,6 +911,12 @@ function today() { return new Date().toISOString().slice(0, 10); }
 // go on being late.
 function isOverdue(f) { return f.due_date && !isClosed(f) && f.due_date < today(); }
 
+function memberName(teamId, userId) {
+  const team = teamById(teamId);
+  const member = team && team.members.find(m => m.user_id === userId);
+  return member ? member.username : "#" + userId;
+}
+
 function findingMeta(f) {
   const meta = document.createElement("div");
   meta.className = "meta";
@@ -859,6 +936,21 @@ function findingMeta(f) {
     src.textContent = f.source;
     src.title = f.source_ref || "";
     meta.appendChild(src);
+  }
+  if (f.team_id) {
+    const team = teamById(f.team_id);
+    const chip = document.createElement("span");
+    chip.className = "team-chip";
+    chip.textContent = team ? team.name : "ekip";
+    chip.title = "Bu bulguyu ekipteki herkes görür";
+    meta.appendChild(chip);
+
+    const who = document.createElement("span");
+    who.className = "assignee" + (f.assignee_id ? "" : " none");
+    who.textContent = f.assignee_id
+      ? "atanan: " + memberName(f.team_id, f.assignee_id)
+      : "atanmamış";
+    meta.appendChild(who);
   }
   if (f.due_date) {
     const due = document.createElement("span");
@@ -956,12 +1048,18 @@ function stateSelect(f, after) {
   // kullanıcı denemeden önce bilsin. Seçenek yine de gizlenmiyor — sunucu tek
   // yetkili, arayüz yalnızca haber veriyor.
   const needsStepUp = currentUser && currentUser.step_up_required && !currentUser.mfa;
+  // Görev ayrılığı, MFA'dan önce gelir: ikinci faktörü olan biri de kendi
+  // bildirdiği bulgunun riskini kabul edemez.
+  const blocked = acceptBlockedReason(f);
   Object.entries(STATUS_LABEL).forEach(([value, label]) => {
     const opt = document.createElement("option");
     opt.value = value;
-    opt.textContent = value === "accepted_risk" && needsStepUp
-      ? label + " (MFA gerekir)"
+    opt.textContent = value !== "accepted_risk"
+      ? label
+      : blocked ? label + " (" + blocked + ")"
+      : needsStepUp ? label + " (MFA gerekir)"
       : label;
+    if (value === "accepted_risk" && blocked) opt.disabled = true;
     if (f.status === value) opt.selected = true;
     sel.appendChild(opt);
   });
@@ -995,6 +1093,35 @@ function rowClass(f) {
   return "finding" + (isClosed(f) ? " closed" : "");
 }
 
+// Atama kendi ucundan gider: bir başlık düzeltmesinin yan etkisi olarak birinin
+// işi başkasına devredilmemeli.
+function assigneeSelect(f) {
+  const sel = document.createElement("select");
+  sel.className = "assign-select";
+  sel.title = "Kim ilgilenecek";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "— atanmamış —";
+  sel.appendChild(none);
+  const team = teamById(f.team_id);
+  (team ? team.members : []).forEach(m => {
+    const o = document.createElement("option");
+    o.value = String(m.user_id); o.textContent = m.username;
+    if (f.assignee_id === m.user_id) o.selected = true;
+    sel.appendChild(o);
+  });
+  sel.onchange = async () => {
+    try {
+      await api("/findings/" + f.id + "/assignee", {
+        method: "PUT",
+        body: JSON.stringify({ assignee_id: sel.value ? Number(sel.value) : null }),
+      });
+      toast(sel.value ? "Atandı: " + memberName(f.team_id, Number(sel.value)) : "Atama kaldırıldı");
+    } catch (e) { toast(e.message); }
+    loadFindings();
+  };
+  return sel;
+}
+
 function findingRow(f) {
   const li = document.createElement("li");
   li.className = rowClass(f);
@@ -1022,6 +1149,7 @@ function findingRow(f) {
 
   const actions = document.createElement("div");
   actions.className = "actions";
+  if (f.team_id) actions.appendChild(assigneeSelect(f));
   const edit = document.createElement("button");
   edit.className = "icon-btn"; edit.title = "Düzenle";
   edit.innerHTML = PENCIL; edit.onclick = () => startEdit(li, f);
@@ -1046,6 +1174,9 @@ function saveFinding(f) {
       severity: f.severity,
       status: f.status,
       due_date: f.due_date,
+      // Ekip, güncelleme ile değiştirilemez; olduğu gibi geri gönderiliyor ki
+      // sunucu "bu bir taşıma denemesi mi" sorusuna doğru cevabı bulsun.
+      team_id: f.team_id ?? null,
       // Tam gövde gönderiliyor: eksik bırakmak kabulün gerekçesini ve süresini
       // sessizce silerdi.
       accepted_reason: f.accepted_reason || null,
@@ -1134,6 +1265,7 @@ document.getElementById("addForm").onsubmit = async (e) => {
   const desc = document.getElementById("descInput");
   const sev = document.getElementById("sevInput");
   const due = document.getElementById("dueInput");
+  const team = document.getElementById("teamInput");
   if (!title.value.trim()) return;
   // due_date left empty on purpose: the server fills it from the severity SLA.
   await api("/findings", {
@@ -1144,6 +1276,7 @@ document.getElementById("addForm").onsubmit = async (e) => {
       asset: asset.value.trim(),
       severity: sev.value,
       due_date: due.value || null,
+      team_id: team.value ? Number(team.value) : null,
     }),
   });
   title.value = ""; asset.value = ""; desc.value = ""; sev.value = "medium"; due.value = "";
@@ -1161,7 +1294,11 @@ document.getElementById("importInput").onchange = async (e) => {
   label.textContent = "Yükleniyor…";
   note.textContent = "";
   try {
-    const r = await api("/import/nuclei", { method: "POST", body: await file.text() });
+    // Taramanın nereye düşeceğini de yukarıdaki ekip seçimi belirler: sonuç,
+    // tarayıcıyı çalıştıran kişinin değil, işi yapacak ekibin olmalı.
+    const team = document.getElementById("teamInput").value;
+    const path = "/import/nuclei" + (team ? "?team_id=" + team : "");
+    const r = await api(path, { method: "POST", body: await file.text() });
     note.textContent =
       `${r.created} yeni · ${r.reopened} yeniden açıldı · ${r.unchanged} değişmedi` +
       (r.kept_accepted ? ` · ${r.kept_accepted} risk kabul korundu` : "") +
@@ -1202,6 +1339,142 @@ document.getElementById("verifyBtn").onclick = async (e) => {
       : `#${r.broken_at} numaralı kayıtta: ${r.reason}`;
     out.append(mark, detail);
   } catch (err) { toast(err.message); } finally { btn.disabled = false; }
+};
+
+// --- Ekipler ---------------------------------------------------------------
+//
+// Ekip, bu uygulamadaki kontrollerin anlam kazandığı yer: ikinci faktör de,
+// yazılı gerekçe de, zincirli günlük de birini kısıtlar. Listeyi tek başına
+// tutan biri için kısıtlanacak kimse yoktur.
+
+let myTeams = [];
+const teamById = id => myTeams.find(t => t.id === id) || null;
+const ROLE_LABEL = { member: "üye", risk_owner: "risk sahibi" };
+
+// Ekipteki kişinin bu bulguyu kabul edip edemeyeceği. Sunucu tek yetkili karar
+// mercii; buradaki amaç kullanıcıyı reddedilecek bir işe sokmamak.
+function acceptBlockedReason(f) {
+  if (!f.team_id) return null;
+  const team = teamById(f.team_id);
+  if (team && team.my_role !== "risk_owner") return "risk sahibi gerekir";
+  if (currentUser && f.owner_id === currentUser.id) return "kendi bildirdiğin bulgu";
+  return null;
+}
+
+function memberChip(team, m) {
+  const chip = document.createElement("span");
+  chip.className = "member" + (m.role === "risk_owner" ? " owner" : "");
+  const name = document.createElement("b");
+  name.textContent = m.username;
+  const role = document.createElement("small");
+  role.textContent = ROLE_LABEL[m.role] || m.role;
+  chip.append(name, role);
+
+  if (team.my_role === "risk_owner" && !(currentUser && m.user_id === currentUser.id)) {
+    const x = document.createElement("button");
+    x.className = "icon-btn del-x"; x.title = "Ekipten çıkar";
+    x.innerHTML = TRASH;
+    x.onclick = async () => {
+      try {
+        await api(`/teams/${team.id}/members/${m.user_id}`, { method: "DELETE" });
+        toast(m.username + " ekipten çıkarıldı");
+        loadTeams();
+      } catch (e) { toast(e.message); }
+    };
+    chip.appendChild(x);
+  }
+  return chip;
+}
+
+function teamCard(team) {
+  const card = document.createElement("div");
+  card.className = "team-card";
+
+  const head = document.createElement("div");
+  head.className = "team-head";
+  const name = document.createElement("b");
+  name.textContent = team.name;                     // textContent → XSS'e kapalı
+  const mine = document.createElement("span");
+  mine.className = "badge";
+  mine.textContent = ROLE_LABEL[team.my_role] || team.my_role;
+  head.append(name, mine);
+
+  const members = document.createElement("div");
+  members.className = "members";
+  team.members.forEach(m => members.appendChild(memberChip(team, m)));
+
+  card.append(head, members);
+
+  if (team.my_role === "risk_owner") {
+    const form = document.createElement("form");
+    form.className = "add-member";
+    const email = document.createElement("input");
+    email.type = "email"; email.placeholder = "E-posta ile ekle"; email.required = true;
+    const role = document.createElement("select");
+    role.className = "mini-select";
+    [["member", "üye"], ["risk_owner", "risk sahibi"]].forEach(([v, l]) => {
+      const o = document.createElement("option"); o.value = v; o.textContent = l;
+      role.appendChild(o);
+    });
+    const add = document.createElement("button");
+    add.className = "btn ghost sm"; add.type = "submit"; add.textContent = "Ekle";
+    form.append(email, role, add);
+    form.onsubmit = async e => {
+      e.preventDefault();
+      try {
+        await api(`/teams/${team.id}/members`, {
+          method: "POST",
+          body: JSON.stringify({ email: email.value.trim(), role: role.value }),
+        });
+        email.value = "";
+        toast("Üye eklendi");
+        loadTeams();
+      } catch (err) { toast(err.message); }
+    };
+    card.appendChild(form);
+  }
+
+  return card;
+}
+
+function fillTeamSelect() {
+  const sel = document.getElementById("teamInput");
+  const chosen = sel.value;
+  sel.innerHTML = "";
+  const personal = document.createElement("option");
+  personal.value = ""; personal.textContent = "Kişisel";
+  sel.appendChild(personal);
+  myTeams.forEach(t => {
+    const o = document.createElement("option");
+    o.value = String(t.id); o.textContent = t.name;
+    sel.appendChild(o);
+  });
+  sel.value = chosen && myTeams.some(t => String(t.id) === chosen) ? chosen : "";
+}
+
+function renderTeams() {
+  const host = document.getElementById("teamList");
+  host.innerHTML = "";
+  document.getElementById("teamsEmpty").classList.toggle("hidden", myTeams.length > 0);
+  myTeams.forEach(t => host.appendChild(teamCard(t)));
+}
+
+async function loadTeams() {
+  myTeams = await api("/teams");
+  fillTeamSelect();
+  renderTeams();
+}
+
+document.getElementById("teamForm").onsubmit = async e => {
+  e.preventDefault();
+  const input = document.getElementById("teamName");
+  if (!input.value.trim()) return;
+  try {
+    await api("/teams", { method: "POST", body: JSON.stringify({ name: input.value.trim() }) });
+    input.value = "";
+    toast("Ekip kuruldu — risk sahibi sensin");
+    loadTeams();
+  } catch (err) { toast(err.message); }
 };
 
 // --- İzlenen varlıklar -----------------------------------------------------
@@ -1623,7 +1896,7 @@ async function loadSecurity() {
   });
 }
 
-const VIEWS = { dash: "dashView", my: "myView", assets: "assetsView", history: "historyView", security: "securityView", admin: "adminView" };
+const VIEWS = { dash: "dashView", my: "myView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -1636,6 +1909,7 @@ function setupTabs() {
       if (v === "dash") loadFindings().then(loadDash).catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
+      if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
       if (v === "security") loadSecurity().catch(() => {});
     };
@@ -1683,6 +1957,9 @@ async function render() {
     // Everyone gets Bulgularım + Geçmişim; the Yönetim tab is admin-only.
     document.getElementById("tabs").classList.remove("hidden");
     document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
+    // Before the findings: a row cannot say which team it belongs to, or who
+    // may accept its risk, until we know which teams this person is in.
+    await loadTeams();
     await loadFindings();
     await loadDash();
   } catch (e) {

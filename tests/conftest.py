@@ -84,10 +84,26 @@ def client(db):
         app.dependency_overrides[get_current_user] = lambda: user
         return user
 
+    def become(user, amr=None, acr=None, roles=None):
+        """Switch to an account that already exists.
+
+        login_as() creates a user; a test about two people working the same
+        finding has to be able to go back to the first one.
+        """
+        if amr is not None:
+            user.amr = amr
+        if acr is not None:
+            user.acr = acr
+        if roles is not None:
+            user.roles = roles
+        app.dependency_overrides[get_current_user] = lambda: user
+        return user
+
     def logout():
         app.dependency_overrides.pop(get_current_user, None)
 
     test_client.login_as = login_as
+    test_client.become = become
     test_client.logout = logout
     # The same session the app uses, so a test can move time forward or tamper
     # with a row the way the outside world would.
