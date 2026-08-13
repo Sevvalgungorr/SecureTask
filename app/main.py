@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import text
+from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -30,18 +30,25 @@ from app.models import (
     MIN_ACCEPTANCE_REASON,
     SEVERITY_ORDER,
     SLA_DAYS,
+    TEAM_RISK_OWNER,
     Asset,
     AuditLog,
     Finding,
+    Team,
+    TeamMember,
     User,
 )
 from app.schemas import (
     AssetCreate,
     AssetResponse,
+    AssigneeUpdate,
     AuditLogResponse,
     FindingCreate,
     FindingResponse,
     FindingUpdate,
+    TeamCreate,
+    TeamMemberAdd,
+    TeamResponse,
 )
 
 app = FastAPI(
@@ -188,19 +195,90 @@ def _record_audit(
     db.commit()
 
 
-def _get_owned_finding(finding_id: int, user: User, db: Session) -> Finding:
-    finding = (
-        db.query(Finding)
-        .filter(Finding.id == finding_id, Finding.owner_id == user.id)
+def _my_team_ids(db: Session, user: User) -> list[int]:
+    return [
+        row.team_id
+        for row in db.query(TeamMember).filter(TeamMember.user_id == user.id).all()
+    ]
+
+
+def _my_role_in(db: Session, user: User, team_id: int) -> str | None:
+    """The caller's role in one team, or None if they are not in it."""
+    membership = (
+        db.query(TeamMember)
+        .filter(TeamMember.team_id == team_id, TeamMember.user_id == user.id)
         .first()
     )
 
-    # A finding owned by someone else is reported as missing rather than
-    # forbidden, so the endpoint does not confirm that the id exists.
+    return membership.role if membership else None
+
+
+def _visible_to(db: Session, user: User):
+    """The findings this user may see: their own, plus their teams'.
+
+    A finding with no team stays private to whoever filed it, which is what
+    every row looked like before teams existed.
+    """
+    team_ids = _my_team_ids(db, user)
+
+    return or_(Finding.owner_id == user.id, Finding.team_id.in_(team_ids))
+
+
+def _get_visible_finding(finding_id: int, user: User, db: Session) -> Finding:
+    finding = (
+        db.query(Finding)
+        .filter(Finding.id == finding_id, _visible_to(db, user))
+        .first()
+    )
+
+    # A finding belonging to someone else's team is reported as missing rather
+    # than forbidden, so the endpoint does not confirm that the id exists.
     if finding is None:
         raise HTTPException(status_code=404, detail="Finding not found")
 
     return finding
+
+
+def _require_membership(db: Session, user: User, team_id: int) -> str:
+    """Refuse a team the caller is not in, without confirming it exists."""
+    role = _my_role_in(db, user, team_id)
+
+    if role is None:
+        raise HTTPException(status_code=404, detail="Ekip bulunamadı")
+
+    return role
+
+
+def _assert_may_accept(db: Session, user: User, finding: Finding) -> None:
+    """Separation of duties: the one who reports may not be the one who accepts.
+
+    Accepting a risk is the only way to close a finding while leaving the
+    problem in place, so it is the decision most worth splitting between two
+    people. Whoever filed it has already said it matters; letting the same
+    person then declare it acceptable makes the record of that decision worth
+    nothing.
+
+    A finding with no team is outside this rule — not as an exception granted,
+    but because one person cannot be two, and a personal list has no second
+    person to ask. That the separation did not apply is written into the log.
+    """
+    if finding.team_id is None:
+        return
+
+    if _my_role_in(db, user, finding.team_id) != TEAM_RISK_OWNER:
+        raise HTTPException(
+            status_code=403,
+            detail="Bir riski yalnızca ekibin risk sahibi kabul edebilir.",
+        )
+
+    if finding.owner_id == user.id:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "Kendi bildirdiğin bulgunun riskini kabul edemezsin — "
+                "kabulü ekipteki başka bir risk sahibi vermeli (görev ayrılığı)."
+            ),
+        )
 
 
 def _sla_due_date(severity: str) -> date:
@@ -325,11 +403,8 @@ def create_finding(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    # Filing a finding as already-accepted is the same decision as accepting one
-    # later, so it meets the same bar.
-    if finding.status == ACCEPTED_RISK:
-        require_step_up(user)
-        _validate_acceptance(finding)
+    if finding.team_id is not None:
+        _require_membership(db, user, finding.team_id)
 
     new_finding = Finding(
         title=finding.title,
@@ -339,9 +414,16 @@ def create_finding(
         status=finding.status,
         due_date=finding.due_date or _sla_due_date(finding.severity),
         owner_id=user.id,
+        team_id=finding.team_id,
     )
 
+    # Filing a finding as already-accepted is the same decision as accepting one
+    # later, so it meets the same bar. Inside a team it can never be met on the
+    # way in: the reporter is the caller, and the reporter may not accept.
     if finding.status == ACCEPTED_RISK:
+        require_step_up(user)
+        _assert_may_accept(db, user, new_finding)
+        _validate_acceptance(finding)
         _apply_acceptance(new_finding, finding, user)
 
     db.add(new_finding)
@@ -364,7 +446,7 @@ def get_findings(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return db.query(Finding).filter(Finding.owner_id == user.id).all()
+    return db.query(Finding).filter(_visible_to(db, user)).all()
 
 
 @app.get("/findings/{finding_id}", response_model=FindingResponse)
@@ -373,7 +455,7 @@ def get_finding(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    return _get_owned_finding(finding_id, user, db)
+    return _get_visible_finding(finding_id, user, db)
 
 
 @app.put("/findings/{finding_id}", response_model=FindingResponse)
@@ -383,13 +465,23 @@ def update_finding(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    finding = _get_owned_finding(finding_id, user, db)
+    finding = _get_visible_finding(finding_id, user, db)
+
+    # Which team a finding belongs to says who may see it, so it is not part of
+    # an ordinary edit. Changing it silently through a full-row update would
+    # move a finding out of sight of the people working it.
+    if finding_data.team_id != finding.team_id:
+        raise HTTPException(
+            status_code=422,
+            detail="Bir bulgunun ekibi güncelleme ile değiştirilemez.",
+        )
 
     # Only the transition is guarded. A finding that is already accepted can
     # still be retitled or re-described without a second factor; what needs one
     # is the decision to carry the risk.
     if finding_data.status == ACCEPTED_RISK and finding.status != ACCEPTED_RISK:
         require_step_up(user)
+        _assert_may_accept(db, user, finding)
         _validate_acceptance(finding_data)
 
     # Read the change summary before the row is overwritten.
@@ -423,7 +515,19 @@ def delete_finding(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    finding = _get_owned_finding(finding_id, user, db)
+    finding = _get_visible_finding(finding_id, user, db)
+
+    # Deleting is the one action a team-mate cannot take on someone else's
+    # behalf: it removes the row rather than recording an outcome for it. The
+    # reporter may withdraw what they filed, and a risk owner may clear the
+    # board; anyone else has "fixed" and "accepted" to work with.
+    if finding.team_id is not None and finding.owner_id != user.id:
+        if _my_role_in(db, user, finding.team_id) != TEAM_RISK_OWNER:
+            raise HTTPException(
+                status_code=403,
+                detail="Bu bulguyu yalnızca bildiren kişi veya ekibin risk sahibi silebilir.",
+            )
+
     title = finding.title
 
     db.delete(finding)
@@ -434,9 +538,251 @@ def delete_finding(
     return {"message": "Finding deleted"}
 
 
+@app.put("/findings/{finding_id}/assignee", response_model=FindingResponse)
+def set_assignee(
+    finding_id: int,
+    data: AssigneeUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Hand a finding to someone, or hand it back.
+
+    Its own endpoint rather than a field on the full-row update: assignment is
+    a statement about a person, and it should not be possible to reassign
+    someone's work as a side effect of fixing a typo in the title.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+
+    if finding.team_id is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Kişisel bir bulgu atanamaz — önce bir ekibe ait olmalı.",
+        )
+
+    if data.assignee_id is None:
+        finding.assignee_id = None
+        db.commit()
+        db.refresh(finding)
+        _record_audit(db, user, "assigned", finding.id,
+                      f"{finding.title} · atama kaldırıldı")
+
+        return finding
+
+    # Assigning outside the team would put work on someone who cannot see it.
+    assignee = (
+        db.query(User)
+        .join(TeamMember, TeamMember.user_id == User.id)
+        .filter(User.id == data.assignee_id, TeamMember.team_id == finding.team_id)
+        .first()
+    )
+
+    if assignee is None:
+        raise HTTPException(
+            status_code=422, detail="Atanan kişi bu ekibin üyesi değil."
+        )
+
+    finding.assignee_id = assignee.id
+    db.commit()
+    db.refresh(finding)
+
+    _record_audit(db, user, "assigned", finding.id,
+                  f"{finding.title} · atandı: {assignee.username}")
+
+    return finding
+
+
+# --- Teams: the second person in the room ----------------------------------
+
+
+def _team_response(db: Session, team: Team, my_role: str) -> dict:
+    members = (
+        db.query(TeamMember, User)
+        .join(User, User.id == TeamMember.user_id)
+        .filter(TeamMember.team_id == team.id)
+        .all()
+    )
+
+    return {
+        "id": team.id,
+        "name": team.name,
+        "my_role": my_role,
+        "members": [
+            {"user_id": user.id, "username": user.username, "role": membership.role}
+            for membership, user in members
+        ],
+    }
+
+
+@app.post("/teams", response_model=TeamResponse)
+def create_team(
+    data: TeamCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Create a team; whoever creates it is its first risk owner.
+
+    Someone has to be able to accept a risk or the team could never close one
+    that way — but this does not weaken the separation, because a risk owner
+    still cannot accept a finding they reported themselves. A team of one can
+    file and fix; to accept, it needs a second person.
+    """
+    name = data.name.strip()
+
+    if not name:
+        raise HTTPException(status_code=422, detail="Ekibin bir adı olmalı.")
+
+    if db.query(Team).filter(Team.name == name).first() is not None:
+        raise HTTPException(status_code=409, detail="Bu adda bir ekip zaten var.")
+
+    team = Team(name=name, created_by_id=user.id)
+    db.add(team)
+    db.flush()
+
+    db.add(TeamMember(team_id=team.id, user_id=user.id, role=TEAM_RISK_OWNER))
+    audit.append(
+        db, user_id=user.id, action="team_created",
+        detail=_sanitize_log(f"ekip oluşturuldu: {name}"),
+    )
+    db.commit()
+    db.refresh(team)
+
+    return _team_response(db, team, TEAM_RISK_OWNER)
+
+
+@app.get("/teams", response_model=list[TeamResponse])
+def list_teams(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The teams the caller belongs to, with who else is in them."""
+    rows = (
+        db.query(Team, TeamMember)
+        .join(TeamMember, TeamMember.team_id == Team.id)
+        .filter(TeamMember.user_id == user.id)
+        .order_by(Team.name)
+        .all()
+    )
+
+    return [_team_response(db, team, membership.role) for team, membership in rows]
+
+
+@app.post("/teams/{team_id}/members", response_model=TeamResponse)
+def add_team_member(
+    team_id: int,
+    data: TeamMemberAdd,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if _require_membership(db, user, team_id) != TEAM_RISK_OWNER:
+        raise HTTPException(
+            status_code=403, detail="Ekibe yalnızca risk sahibi üye ekleyebilir."
+        )
+
+    if data.user_id is not None:
+        person = db.query(User).filter(User.id == data.user_id).first()
+    elif data.email:
+        person = (
+            db.query(User).filter(User.email == data.email.strip().lower()).first()
+        )
+    else:
+        raise HTTPException(
+            status_code=422, detail="Eklenecek kişinin e-postası veya id'si gerekli."
+        )
+
+    if person is None:
+        raise HTTPException(status_code=404, detail="Kullanıcı bulunamadı")
+
+    existing = (
+        db.query(TeamMember)
+        .filter(TeamMember.team_id == team_id, TeamMember.user_id == person.id)
+        .first()
+    )
+
+    if existing is not None:
+        # Changing an existing member's role is the same request in practice,
+        # and refusing it would only mean remove-then-add.
+        existing.role = data.role
+    else:
+        db.add(TeamMember(team_id=team_id, user_id=person.id, role=data.role))
+
+    audit.append(
+        db, user_id=user.id, action="member_added",
+        detail=_sanitize_log(f"{person.username} → {data.role} (ekip {team_id})"),
+    )
+    db.commit()
+
+    team = db.query(Team).filter(Team.id == team_id).first()
+
+    return _team_response(db, team, TEAM_RISK_OWNER)
+
+
+@app.delete("/teams/{team_id}/members/{user_id}")
+def remove_team_member(
+    team_id: int,
+    user_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    if _require_membership(db, user, team_id) != TEAM_RISK_OWNER:
+        raise HTTPException(
+            status_code=403, detail="Ekipten yalnızca risk sahibi üye çıkarabilir."
+        )
+
+    membership = (
+        db.query(TeamMember)
+        .filter(TeamMember.team_id == team_id, TeamMember.user_id == user_id)
+        .first()
+    )
+
+    if membership is None:
+        raise HTTPException(status_code=404, detail="Üye bulunamadı")
+
+    # A team with no risk owner can never accept a risk again, and its open
+    # acceptances would expire with nobody able to renew them.
+    if membership.role == TEAM_RISK_OWNER:
+        remaining = (
+            db.query(TeamMember)
+            .filter(
+                TeamMember.team_id == team_id,
+                TeamMember.role == TEAM_RISK_OWNER,
+                TeamMember.user_id != user_id,
+            )
+            .count()
+        )
+
+        if remaining == 0:
+            raise HTTPException(
+                status_code=422,
+                detail="Ekibin son risk sahibi çıkarılamaz — önce başka birini risk sahibi yap.",
+            )
+
+    db.delete(membership)
+    audit.append(
+        db, user_id=user.id, action="member_removed",
+        detail=_sanitize_log(f"kullanıcı {user_id} ekip {team_id} dışına alındı"),
+    )
+    db.commit()
+
+    return {"message": "Member removed"}
+
+
+def _scope(user: User, team_id: int | None):
+    """Where a tool's findings live, and what it deduplicates against.
+
+    Filed into a team, a scan result belongs to the team rather than to
+    whoever happened to run the scan: two people importing the same output
+    should not produce two copies of the same finding.
+    """
+    if team_id is None:
+        return Finding.owner_id == user.id
+
+    return Finding.team_id == team_id
+
+
 @app.post("/import/nuclei")
 async def import_nuclei(
     request: Request,
+    team_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -457,6 +803,9 @@ async def import_nuclei(
     So a scan can add work and can prove that work was not finished. It cannot
     erase a judgement.
     """
+    if team_id is not None:
+        _require_membership(db, user, team_id)
+
     raw = (await request.body()).decode("utf-8", errors="replace")
     results, skipped = parse_nuclei(raw)
 
@@ -469,7 +818,7 @@ async def import_nuclei(
         existing = (
             db.query(Finding)
             .filter(
-                Finding.owner_id == user.id,
+                _scope(user, team_id),
                 Finding.asset == result.asset,
                 Finding.source_ref == result.source_ref,
             )
@@ -488,6 +837,7 @@ async def import_nuclei(
                 source_ref=result.source_ref,
                 source_severity=result.severity,
                 owner_id=user.id,
+                team_id=team_id,
             )
             db.add(finding)
             db.flush()  # need the id for the audit entry
@@ -649,7 +999,9 @@ def _escalate_from_source(finding: Finding, reported: str) -> str | None:
     return before
 
 
-def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
+def _reconcile(
+    db: Session, user: User, host: str, results: list, team_id: int | None = None
+) -> dict:
     """Fold one host's check results into its findings.
 
     The rules follow the importer's, for the same reason: a check reports what
@@ -667,7 +1019,7 @@ def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
         finding = (
             db.query(Finding)
             .filter(
-                Finding.owner_id == user.id,
+                _scope(user, team_id),
                 Finding.asset == host,
                 Finding.source == "monitor",
                 Finding.source_ref == result.check_id,
@@ -687,6 +1039,7 @@ def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
                 source_ref=result.check_id,
                 source_severity=result.severity,
                 owner_id=user.id,
+                team_id=team_id,
             )
             db.add(finding)
             db.flush()
@@ -731,7 +1084,7 @@ def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
     stale = (
         db.query(Finding)
         .filter(
-            Finding.owner_id == user.id,
+            _scope(user, team_id),
             Finding.asset == host,
             Finding.source == "monitor",
             Finding.status.in_(("open", "triaged")),
@@ -755,6 +1108,7 @@ def _reconcile(db: Session, user: User, host: str, results: list) -> dict:
 
 @app.post("/monitor/run")
 def run_monitor(
+    team_id: int | None = None,
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -764,6 +1118,9 @@ def run_monitor(
     runs on a schedule here — cron, a CI job — can call it, and the run stays
     something a person can trigger and watch.
     """
+    if team_id is not None:
+        _require_membership(db, user, team_id)
+
     assets = (
         db.query(Asset)
         .filter(Asset.owner_id == user.id, Asset.is_active.is_(True))
@@ -783,7 +1140,7 @@ def run_monitor(
             refused.append({"host": asset.host, "reason": str(error)})
             continue
 
-        for key, value in _reconcile(db, user, asset.host, results).items():
+        for key, value in _reconcile(db, user, asset.host, results, team_id).items():
             totals[key] += value
 
     summary = (
@@ -819,7 +1176,9 @@ def expire_acceptances(
     expired = (
         db.query(Finding)
         .filter(
-            Finding.owner_id == user.id,
+            # Anyone who can see a finding may run the sweep on it: expiry is
+            # not a decision, it is the deadline someone already set arriving.
+            _visible_to(db, user),
             Finding.status == ACCEPTED_RISK,
             Finding.accepted_until < today,
         )
