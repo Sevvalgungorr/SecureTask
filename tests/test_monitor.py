@@ -4,10 +4,14 @@ No test here touches the network. The checks are replaced with a stub, because
 what needs proving is the bookkeeping — which findings get opened, escalated,
 reopened and closed — not that httpx can make a request.
 """
+from datetime import date, timedelta
+
 import pytest
 
 import app.main as main_module
 from app.monitor import CheckResult, TargetRefused
+
+REASON = "Sağlayıcı yaması çıkana kadar ağ tarafında sınırlandırıldı"
 
 
 @pytest.fixture()
@@ -197,7 +201,10 @@ def test_an_accepted_risk_survives_a_run(client, checks):
     client.post("/monitor/run")
 
     finding = client.get("/findings").json()[0]
-    client.put(f"/findings/{finding['id']}", json={**finding, "status": "accepted_risk"})
+    client.put(f"/findings/{finding['id']}", json={
+        **finding, "status": "accepted_risk", "accepted_reason": REASON,
+        "accepted_until": str(date.today() + timedelta(days=30)),
+    })
 
     assert client.post("/monitor/run").json()["kept_accepted"] == 1
     assert client.get(f"/findings/{finding['id']}").json()["status"] == "accepted_risk"

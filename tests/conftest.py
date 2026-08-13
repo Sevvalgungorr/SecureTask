@@ -89,6 +89,9 @@ def client(db):
 
     test_client.login_as = login_as
     test_client.logout = logout
+    # The same session the app uses, so a test can move time forward or tamper
+    # with a row the way the outside world would.
+    test_client.db = db
 
     yield test_client
 

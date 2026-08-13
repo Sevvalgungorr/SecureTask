@@ -1,6 +1,6 @@
 import time
 from collections import defaultdict, deque
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
@@ -11,6 +11,7 @@ from sqlalchemy import text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
+from app import audit
 from app.auth import (
     callback_router,
     get_current_user,
@@ -25,6 +26,8 @@ from app.importers import parse_nuclei
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
 from app.models import (
     ACCEPTED_RISK,
+    MAX_ACCEPTANCE_DAYS,
+    MIN_ACCEPTANCE_REASON,
     SEVERITY_ORDER,
     SLA_DAYS,
     Asset,
@@ -164,7 +167,7 @@ async def log_denied_access(request, call_next):
         )
         db = SessionLocal()
         try:
-            db.add(AuditLog(action="access_denied", detail=detail))
+            audit.append(db, action="access_denied", detail=detail)
             db.commit()
         finally:
             db.close()
@@ -179,13 +182,8 @@ def _record_audit(
     finding_id: int,
     detail: str | None = None,
 ) -> None:
-    db.add(
-        AuditLog(
-            user_id=user.id,
-            action=action,
-            finding_id=finding_id,
-            detail=detail,
-        )
+    audit.append(
+        db, user_id=user.id, action=action, finding_id=finding_id, detail=detail
     )
     db.commit()
 
@@ -208,6 +206,67 @@ def _get_owned_finding(finding_id: int, user: User, db: Session) -> Finding:
 def _sla_due_date(severity: str) -> date:
     """The remediation deadline implied by a severity, counted from today."""
     return date.today() + timedelta(days=SLA_DAYS[severity])
+
+
+def _validate_acceptance(data: FindingCreate) -> None:
+    """A risk may only be accepted with an argument and an end date.
+
+    Both are refused rather than defaulted. A default reason would be no reason,
+    and a default expiry would decide on someone's behalf how long the
+    organisation carries this — which is the decision being made.
+    """
+    reason = (data.accepted_reason or "").strip()
+
+    if len(reason) < MIN_ACCEPTANCE_REASON:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Riski kabul etmek için gerekçe yazılmalı "
+                f"(en az {MIN_ACCEPTANCE_REASON} karakter)."
+            ),
+        )
+
+    if data.accepted_until is None:
+        raise HTTPException(
+            status_code=422,
+            detail="Riski kabul etmek için bir bitiş tarihi verilmeli.",
+        )
+
+    today = date.today()
+
+    if data.accepted_until <= today:
+        raise HTTPException(
+            status_code=422, detail="Bitiş tarihi gelecekte olmalı."
+        )
+
+    if (data.accepted_until - today).days > MAX_ACCEPTANCE_DAYS:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Bir risk en fazla {MAX_ACCEPTANCE_DAYS} gün için kabul "
+                "edilebilir. Süresi dolunca bulgu yeniden açılır."
+            ),
+        )
+
+
+def _apply_acceptance(finding: Finding, data: FindingCreate, user: User) -> None:
+    finding.accepted_reason = (data.accepted_reason or "").strip()
+    finding.accepted_until = data.accepted_until
+    finding.accepted_at = datetime.now(timezone.utc)
+    finding.accepted_by_id = user.id
+
+
+def _clear_acceptance(finding: Finding) -> None:
+    """Drop the acceptance when it ends.
+
+    The fields describe the acceptance in force; once it is over they would
+    only mislead. What was accepted, by whom and until when stays in the audit
+    log, which is the record that is meant to be read back.
+    """
+    finding.accepted_reason = None
+    finding.accepted_until = None
+    finding.accepted_at = None
+    finding.accepted_by_id = None
 
 
 def _describe_changes(finding: Finding, new: FindingUpdate, user: User) -> str:
@@ -270,6 +329,7 @@ def create_finding(
     # later, so it meets the same bar.
     if finding.status == ACCEPTED_RISK:
         require_step_up(user)
+        _validate_acceptance(finding)
 
     new_finding = Finding(
         title=finding.title,
@@ -280,6 +340,9 @@ def create_finding(
         due_date=finding.due_date or _sla_due_date(finding.severity),
         owner_id=user.id,
     )
+
+    if finding.status == ACCEPTED_RISK:
+        _apply_acceptance(new_finding, finding, user)
 
     db.add(new_finding)
     db.commit()
@@ -327,6 +390,7 @@ def update_finding(
     # is the decision to carry the risk.
     if finding_data.status == ACCEPTED_RISK and finding.status != ACCEPTED_RISK:
         require_step_up(user)
+        _validate_acceptance(finding_data)
 
     # Read the change summary before the row is overwritten.
     detail = _describe_changes(finding, finding_data, user)
@@ -334,9 +398,16 @@ def update_finding(
     finding.title = finding_data.title
     finding.description = finding_data.description
     finding.asset = finding_data.asset
+    was_accepted = finding.status == ACCEPTED_RISK
     finding.severity = finding_data.severity
     finding.status = finding_data.status
     finding.due_date = finding_data.due_date
+
+    if finding_data.status == ACCEPTED_RISK and not was_accepted:
+        _apply_acceptance(finding, finding_data, user)
+    elif finding_data.status != ACCEPTED_RISK and was_accepted:
+        # Leaving the accepted state ends the acceptance, whatever it moved to.
+        _clear_acceptance(finding)
 
     db.commit()
     db.refresh(finding)
@@ -467,8 +538,8 @@ async def import_nuclei(
         f"· {skipped} okunamadı"
     )
     # finding_id is None: this entry is about the import, not one finding.
-    db.add(
-        AuditLog(user_id=user.id, action="imported", detail=_sanitize_log(summary))
+    audit.append(
+        db, user_id=user.id, action="imported", detail=_sanitize_log(summary)
     )
     db.commit()
 
@@ -720,12 +791,83 @@ def run_monitor(
         f"· {totals['reopened']} yeniden açıldı · {totals['escalated']} yükseltildi "
         f"· {totals['resolved']} kapandı · {len(refused)} reddedildi"
     )
-    db.add(
-        AuditLog(user_id=user.id, action="monitored", detail=_sanitize_log(summary))
+    audit.append(
+        db, user_id=user.id, action="monitored", detail=_sanitize_log(summary)
     )
     db.commit()
 
     return {"checked": len(assets), "refused": refused, **totals}
+
+
+@app.post("/risk/expire")
+def expire_acceptances(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Reopen every risk acceptance whose end date has passed.
+
+    This is the point of putting an end date on an acceptance. Without a sweep
+    the date is a note; with it, a decision to live with something comes back
+    on its own and has to be made again, by someone, with a second factor —
+    which is how it stops being permanent by neglect.
+
+    An endpoint rather than a background timer, for the same reason as the
+    monitor: whatever already runs on a schedule can call it, and a person can
+    run it and watch what happened.
+    """
+    today = date.today()
+    expired = (
+        db.query(Finding)
+        .filter(
+            Finding.owner_id == user.id,
+            Finding.status == ACCEPTED_RISK,
+            Finding.accepted_until < today,
+        )
+        .all()
+    )
+
+    for finding in expired:
+        until = finding.accepted_until
+        finding.status = "open"
+        # A reopened finding needs a live deadline; the old one is long gone.
+        finding.due_date = _sla_due_date(finding.severity)
+        _clear_acceptance(finding)
+        _record_audit(
+            db,
+            user,
+            "updated",
+            finding.id,
+            f"{finding.title} · status accepted_risk→open "
+            f"· risk kabulünün süresi doldu ({until.isoformat()})",
+        )
+
+    if expired:
+        audit.append(
+            db,
+            user_id=user.id,
+            action="expired",
+            detail=_sanitize_log(f"{len(expired)} risk kabulünün süresi doldu"),
+        )
+        db.commit()
+
+    return {
+        "reopened": len(expired),
+        "findings": [f.id for f in expired],
+    }
+
+
+@app.get("/admin/audit/verify")
+def verify_audit_chain(
+    user: User = Depends(require_role("admin")),
+    db: Session = Depends(get_db),
+):
+    """Walk the audit chain and report the first entry that does not hold.
+
+    Read-only and admin-only. It answers one question — has this log been
+    changed since it was written — and names the entry where the answer stops
+    being no.
+    """
+    return audit.verify(db)
 
 
 @app.get("/audit/me", response_model=list[AuditLogResponse])
