@@ -20,6 +20,8 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Yetkisiz yönetim erişimi | `require_role("admin")` ile korunan `/admin/*` uçları | `test_findings.py::test_admin_sees_all_findings_others_forbidden` |
 | Riskin sessizce yok edilmesi (kritikliği düşürme, "risk kabul" ile kapatma) | Denetim günlüğü değişikliği açıkça yazar: `severity critical→low`, `status open→accepted_risk` | `test_audit.py::test_severity_and_status_changes_are_spelled_out` |
 | Ele geçirilmiş bir oturumun riski kabul edip kapatması | **Step-up MFA**: `accepted_risk`'e geçiş, token'daki `amr`/`acr` ile ikinci faktör kanıtlanmadıkça reddedilir (fail-closed) | `test_step_up.py` (8 test) |
+| Riskin gerekçesiz ve süresiz kabul edilmesi | Kabul için **gerekçe zorunlu** (en az 15 karakter) ve **bitiş tarihi zorunlu** (en fazla 90 gün); süre dolunca bulgu yeni SLA ile yeniden açılır | `test_risk_acceptance.py` (12 test) |
+| Denetim kaydının düzenlenmesi, silinmesi veya tarihinin geriye alınması | Günlük **ekleme-yalnız zincir**: her kayıt kendini bir öncekinin hash'iyle imzalar; `/admin/audit/verify` kırılmanın yerini söyler | `test_audit_chain.py` — kayıt düzenlenerek, silinerek, tarihi değiştirilerek sınanır |
 | Otomasyonun insan kararını ezmesi | Araçlar risk kabulüne **dokunmaz**; kritikliği yalnızca **aracın kendi değerlendirmesi yükseldiğinde** yükseltir, asla düşürmez | `test_import.py` · `test_monitor.py` |
 | İzlemenin iç ağa yönlendirilmesi (SSRF) | Hedefler önceden **kayıtlı** olmalı; ad çözümlenip **her** IP kontrol edilir, özel/loopback/link-local reddedilir — hem kayıtta hem koşuda | `test_monitor.py::test_a_private_address_is_refused_at_registration` |
 | İz silme / kaydın kaybolması | Denetim kaydı bulgudan bağımsız yaşar (FK değil), bulgu silinse bile kalır | `test_audit.py::test_audit_survives_finding_deletion` |
@@ -107,6 +109,53 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 `mfa doğrulandı` olarak yazılır; reddedilen deneme ise 403 olduğu için
 `access_denied` kaydına düşer ve panodaki grafikte görünür.
 
+### Risk kabulü: gerekçe, sahip ve bitiş
+
+Bir riski kabul etmek bulguyu kapatır — ama "düzeltildi" ile aynı şey değildir:
+sorun yerinde durur, biri onunla yaşamaya karar vermiştir. O kararın kanıtı
+yoksa kabul, bulgu listesini temizlemenin ucuz yoludur. Bu yüzden üç şey
+zorunludur:
+
+| Alan | Kural |
+| --- | --- |
+| Gerekçe | En az 15 karakter — `-` veya `ok` gerekçe değildir |
+| Bitiş tarihi | Zorunlu, geçmiş olamaz, **en fazla 90 gün**; sonsuza kadar kabul yoktur |
+| Kabul eden | İstekten değil, **ikinci faktörü geçen oturumdan** yazılır — kimse başkasını onaylayan gösteremez |
+
+`POST /risk/expire` süresi dolmuş kabulleri tarar ve bulguyu yeni bir SLA ile
+yeniden açar; olan biten günlüğe yazılır. Tarih böylece bir not olmaktan çıkar:
+karar kendiliğinden geri gelir ve **yeniden verilmek zorunda kalır** — yeniden
+kabul ikinci faktörü tekrar ister. Zamanaşımıyla kalıcılaşan risk kabulü, bu
+uygulamanın engellemek için var olduğu şeydir.
+
+Bulgu kabul durumundan çıkarsa gerekçe, tarih ve onaylayan temizlenir; eski bir
+kabulün kalıntısı yeni bir kararın arkasına saklanamaz.
+
+### Denetim günlüğü neden bir zincir
+
+Yöneticinin düzenleyebildiği bir günlük, o yöneticinin tuttuğu bir defterdir —
+bu uygulamanın var olma sebebi olan tek kayıt için, hiçbir şey kaydetmemekle
+aynı kapıya çıkar. Bu yüzden her kayıt, kendi içeriğini bir önceki kaydın
+hash'iyle birlikte imzalar (SHA-256):
+
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/admin/audit/verify
+# {"ok":true,"checked":128,"broken_at":null,"reason":null}
+```
+
+İmzaya kaydın `id`'si ve sunucu tarafındaki zaman damgası da girer: bir satırı
+düzenlemek, silmek, sıralamayı değiştirmek veya tarihini geriye almak sonraki
+bütün hash'leri bozar. Doğrulama yürüyüşü kırılmanın **nerede** ve **neden**
+olduğunu söyler.
+
+Bu, kurcalamayı imkânsız kılmaz — **belli eder**. Ulaşılabilir hedef budur:
+günlüğü değiştiren kişi sonraki her kaydı yeniden yazmak zorundadır ve elinde
+daha eski bir hash bulunan herkes bunu görebilir.
+
+Zincirden önce yazılmış kayıtlar geriye dönük imzalanmadı: onları şimdi
+imzalamak "değiştirilmemiştir" demek olurdu ve buradaki hiçbir şey bunu
+bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
+
 ## Özellikler
 
 - 🔐 **OpenID Connect / SSO girişi** — parola yalnızca kimlik sağlayıcıya girilir, uygulama görmez (PKCE korumalı)
@@ -115,13 +164,15 @@ olmadan da düzeltilebilir. Kontrolü karşılayan kabul, denetim günlüğüne
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
+- 📝 **Risk kabul kütüğü** — gerekçe ve bitiş tarihi zorunlu (en fazla 90 gün); süre dolunca bulgu kendiliğinden yeniden açılır
 - 📥 **Tarama çıktısı içe aktarma** — nuclei JSON/JSONL; yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
 - 📡 **İzleme** — kayıtlı varlıklarda TLS sertifikası süresi, erişilebilirlik ve güvenlik başlıkları; bozulan kontrol bulgu açar, düzelen kontrol kendi bulgusunu kapatır
 - 👤 **Kullanıcıya özel envanter** — herkes yalnızca kendi bulgularına erişir
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
+- ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 61 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 81 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -193,7 +244,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 61 test
+pytest                                      # 81 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -216,18 +267,22 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `POST` | `/import/nuclei` | Bearer (tarama çıktısı) |
 | `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
 | `POST` | `/monitor/run` | Bearer (kendi varlıkları) |
+| `POST` | `/risk/expire` | Bearer (süresi dolan kabulleri yeniden açar) |
 | `GET` | `/audit/me` | Bearer (kendi geçmişi) |
 | `GET` `DELETE` | `/admin/findings`, `/admin/findings/{id}` | Yalnızca `admin` |
 | `GET` | `/admin/audit` | Yalnızca `admin` |
+| `GET` | `/admin/audit/verify` | Yalnızca `admin` (zincir doğrulama) |
 
 ## Veri modeli
 
 ```
 Finding    id · title · description · asset · severity · status · due_date
            source · source_ref · source_severity · owner_id
+           accepted_reason · accepted_until · accepted_at · accepted_by_id
 Asset      id · host · label · is_active · owner_id
 User       id · username · email · oidc_issuer · oidc_sub · is_active
 AuditLog   id · created_at · user_id · action · finding_id · detail
+           prev_hash · entry_hash
 ```
 
 `severity` ∈ {low, medium, high, critical} · `status` ∈ {open, triaged, fixed, accepted_risk}
@@ -239,6 +294,7 @@ app/
   main.py       # API uçları
   auth.py       # OIDC giriş + token doğrulama
   models.py     # veritabanı tabloları (Finding, User, AuditLog)
+  audit.py      # denetim günlüğü: ekleme-yalnız hash zinciri + doğrulama
   importers.py  # tarayıcı çıktısı ayrıştırma (nuclei)
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   schemas.py    # istek/yanıt doğrulama (Pydantic)
@@ -253,7 +309,7 @@ tests/          # pytest test paketi
 ## Sıradaki işler
 
 - **Token iptali kontrolü (introspection)** — sağlayıcıda oturum kapatılınca token'ın burada da geçersiz olması
-- **Denetim günlüğü bütünlüğü** — hash zinciri: kayıt değiştirilirse zincir kırılır
+- **Zincir doğrulamasının dışa aktarılması** — bir kontrol noktası hash'ini dışarı yazmak, böylece tüm günlüğü yeniden yazan biri bile yakalanabilsin
 
 ## License
 
