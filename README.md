@@ -248,8 +248,9 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
+- 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 137 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 138 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -374,7 +375,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 137 test
+pytest                                      # 138 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -433,14 +434,18 @@ AuditLog   id · created_at · user_id · action · finding_id · detail
 app/
   main.py       # API uçları
   auth.py       # OIDC giriş + token doğrulama
-  models.py     # veritabanı tabloları (Finding, Team, TeamMember, User, AuditLog)
+  models.py     # veritabanı tabloları (Finding, Asset, Team, TeamMember, User, AuditLog)
   audit.py      # denetim günlüğü: ekleme-yalnız hash zinciri + doğrulama
   importers.py  # tarama raporu ayrıştırma (nuclei, SARIF)
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı
   config.py     # ortam ayarları
-  static/       # web arayüzü
+  static/
+    index.html  # sayfa iskeleti (satır içi script/stil yok)
+    app.css     # biçem
+    app.js      # arayüz mantığı
+    vendor/     # kendi sunucumuzdan servis edilen Swagger UI
 alembic/        # veritabanı migration'ları
 tests/          # pytest test paketi
 .github/workflows/ci.yml   # sürekli entegrasyon
