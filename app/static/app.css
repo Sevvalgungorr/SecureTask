@@ -500,7 +500,15 @@
   .login-card .lock svg { width: 30px; height: 30px; }
   .login-card h2 { margin: 0 0 .45rem; font-size: 1.4rem; letter-spacing: -.03em; }
   .login-card p { color: var(--muted); margin: 0 0 1.6rem; font-size: .93rem; }
+  .providers { display: flex; flex-direction: column; gap: .5rem; }
   .login-card .btn { width: 100%; padding: .82rem; font-size: 1rem; }
+  /* İkinciden itibaren ikincil görünüm: bir tanesi kurumsal yol, diğerleri
+     yedek. Hepsini eşit vurgulamak hangisinin beklendiğini gizlerdi. */
+  .providers .btn + .btn {
+    background: transparent; color: var(--muted);
+    border: 1px solid var(--line); box-shadow: none;
+  }
+  .providers .btn + .btn:hover { color: var(--ink); background: var(--line-2); transform: none; }
   .login-card .fine {
     display: flex; align-items: center; justify-content: center; gap: .38rem;
     margin: 1.05rem 0 0; font-size: .78rem; color: var(--faint);

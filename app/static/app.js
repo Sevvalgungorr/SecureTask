@@ -45,7 +45,13 @@ async function logout() {
     // Plain fetch, not api(): api() calls clearSession() on a 401, and routing
     // sign-out through it would fight with the redirect we are about to make.
     const res = await fetch("/auth/logout");
-    if (res.ok) url = (await res.json()).logout_url;
+    if (res.ok) {
+      const body = await res.json();
+      url = body.logout_url;
+      // Sağlayıcı oturum sonlandırma sunmuyorsa (ör. Google) bunu söylemek,
+      // kapanmamış bir oturumu kapanmış gibi göstermekten iyidir.
+      if (!url && body.note) toast(body.note);
+    }
   } catch (e) { /* provider unreachable — the local sign-out below still stands */ }
   // Drop our token first, so a failed redirect can never leave the user signed in.
   localStorage.removeItem(KEY);
@@ -1145,12 +1151,34 @@ function setupTabs() {
 }
 setupTabs();
 
+// Giriş yolları sunucudan sorulur: bir sağlayıcı eklemek yapılandırma işi
+// olmalı, giriş sayfasını düzenleme işi değil.
+async function renderProviders() {
+  const box = document.getElementById("providerButtons");
+
+  try {
+    const list = await (await fetch("/auth/providers")).json();
+    if (!Array.isArray(list) || !list.length) return;   // varsayılan düğme kalsın
+    box.innerHTML = "";
+    list.forEach(p => {
+      const a = document.createElement("a");
+      a.className = "btn";
+      a.href = "/auth/login?provider=" + encodeURIComponent(p.key);
+      a.textContent = p.label + " ile giriş yap";       // textContent → XSS'e kapalı
+      box.appendChild(a);
+    });
+  } catch (e) {
+    /* Sunucuya ulaşılamıyorsa sayfadaki varsayılan düğme yerinde kalır. */
+  }
+}
+
 async function render() {
   const loginView = document.getElementById("loginView");
   const appView = document.getElementById("appView");
   const who = document.getElementById("who");
 
   if (!token()) {
+    renderProviders();
     loginView.classList.remove("hidden");
     appView.classList.add("hidden");
     who.innerHTML = "";

@@ -13,16 +13,14 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import (
-    OIDC_AUDIENCE,
-    OIDC_CLIENT_ID,
-    OIDC_CLIENT_SECRET,
-    OIDC_ISSUER,
+    DEFAULT_PROVIDER,
     OIDC_MFA_ACR,
     OIDC_MFA_AMR,
     OIDC_POST_LOGOUT_REDIRECT_URI,
     OIDC_REDIRECT_URI,
-    OIDC_SCOPE,
+    PROVIDERS,
     STEP_UP_REQUIRED,
+    Provider,
 )
 from app.database import get_db
 from app.models import User
@@ -41,8 +39,44 @@ _jwt = JsonWebToken(_ALLOWED_ALGORITHMS)
 _JWKS_TTL_SECONDS = 3600
 _USERINFO_TTL_SECONDS = 60
 
-_jwks_cache: dict = {"keys": None, "fetched_at": 0.0}
+# Keyed by provider: two providers have two key sets, and caching them
+# together would let one answer for the other.
+_jwks_cache: dict[str, dict] = {}
 _userinfo_cache: dict = {}
+
+
+def provider_for(key: str | None) -> Provider:
+    """The configured provider named by `key`, or the default."""
+    return PROVIDERS.get(key or DEFAULT_PROVIDER) or PROVIDERS[DEFAULT_PROVIDER]
+
+
+def _unverified_issuer(token: str) -> str | None:
+    """Read `iss` out of a JWT without trusting it.
+
+    Only used to decide *which* key set to verify against — the same thing
+    issuer-based key discovery does everywhere. The claim is then checked
+    again after verification, against the provider it selected, so a forged
+    `iss` selects a provider whose keys will not validate the signature.
+    """
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        return json.loads(base64.urlsafe_b64decode(payload)).get("iss")
+    except (ValueError, IndexError, json.JSONDecodeError):
+        return None
+
+
+def provider_for_token(token: str) -> Provider:
+    """Which provider a bearer token claims to be from."""
+    issuer = _unverified_issuer(token)
+
+    for candidate in PROVIDERS.values():
+        if candidate.issuer == issuer:
+            return candidate
+
+    # An opaque token carries no issuer to read; it can only have come from a
+    # provider that issues them, which here is the default one.
+    return PROVIDERS[DEFAULT_PROVIDER]
 
 
 def _unauthorized(detail: str) -> HTTPException:
@@ -53,19 +87,19 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
-def _load_jwks() -> dict:
+def _load_jwks(provider: Provider) -> dict:
     now = time.monotonic()
+    cached = _jwks_cache.get(provider.key)
 
-    if _jwks_cache["keys"] and now - _jwks_cache["fetched_at"] < _JWKS_TTL_SECONDS:
-        return _jwks_cache["keys"]
+    if cached and now - cached["fetched_at"] < _JWKS_TTL_SECONDS:
+        return cached["keys"]
 
     with httpx.Client(timeout=10) as client:
-        response = client.get(f"{OIDC_ISSUER}/.well-known/jwks.json")
+        response = client.get(provider.jwks_url)
         response.raise_for_status()
         keys = response.json()
 
-    _jwks_cache["keys"] = keys
-    _jwks_cache["fetched_at"] = now
+    _jwks_cache[provider.key] = {"keys": keys, "fetched_at": now}
 
     return keys
 
@@ -74,14 +108,17 @@ def _looks_like_jwt(token: str) -> bool:
     return token.count(".") == 2
 
 
-def _claims_from_jwt(token: str) -> dict:
+def _claims_from_jwt(token: str, provider: Provider) -> dict:
     try:
-        claims = _jwt.decode(token, _load_jwks())
+        claims = _jwt.decode(token, _load_jwks(provider))
         claims.validate()
     except JoseError as error:
         raise _unauthorized("Invalid token") from error
 
-    if claims.get("iss") != OIDC_ISSUER:
+    # Checked again after verification: the unverified read only chose which
+    # keys to try, and a token that verified under one provider's keys must
+    # also say it came from that provider.
+    if claims.get("iss") != provider.issuer:
         raise _unauthorized("Invalid token issuer")
 
     # Some deployments issue access tokens whose audience is an API identifier
@@ -92,13 +129,13 @@ def _claims_from_jwt(token: str) -> dict:
     if audience is not None:
         allowed = audience if isinstance(audience, list) else [audience]
 
-        if OIDC_AUDIENCE not in allowed:
+        if provider.audience not in allowed:
             raise _unauthorized("Invalid token audience")
 
     return dict(claims)
 
 
-def _claims_from_userinfo(token: str) -> dict:
+def _claims_from_userinfo(token: str, provider: Provider) -> dict:
     cached = _userinfo_cache.get(token)
 
     if cached and time.monotonic() < cached["expires_at"]:
@@ -106,7 +143,7 @@ def _claims_from_userinfo(token: str) -> dict:
 
     with httpx.Client(timeout=10) as client:
         response = client.get(
-            f"{OIDC_ISSUER}/oauth/userinfo",
+            provider.userinfo_url,
             headers={"Authorization": f"Bearer {token}"},
         )
 
@@ -124,7 +161,7 @@ def _claims_from_userinfo(token: str) -> dict:
     return claims
 
 
-def _upsert_user(db: Session, claims: dict) -> User:
+def _upsert_user(db: Session, claims: dict, provider: Provider) -> User:
     subject = claims.get("sub")
 
     if not subject:
@@ -132,7 +169,7 @@ def _upsert_user(db: Session, claims: dict) -> User:
 
     user = (
         db.query(User)
-        .filter(User.oidc_issuer == OIDC_ISSUER, User.oidc_sub == subject)
+        .filter(User.oidc_issuer == provider.issuer, User.oidc_sub == subject)
         .first()
     )
 
@@ -141,7 +178,7 @@ def _upsert_user(db: Session, claims: dict) -> User:
 
     if user is None:
         user = User(
-            oidc_issuer=OIDC_ISSUER,
+            oidc_issuer=provider.issuer,
             oidc_sub=subject,
             username=username,
             email=email,
@@ -174,12 +211,17 @@ def get_current_user(
 
     # A JWT is verified locally against the provider's JWKS. An opaque token
     # carries no verifiable claims, so the provider itself must vouch for it.
-    if _looks_like_jwt(token):
-        claims = _claims_from_jwt(token)
-    else:
-        claims = _claims_from_userinfo(token)
+    provider = provider_for_token(token)
 
-    user = _upsert_user(db, claims)
+    if _looks_like_jwt(token):
+        claims = _claims_from_jwt(token, provider)
+    else:
+        claims = _claims_from_userinfo(token, provider)
+
+    user = _upsert_user(db, claims, provider)
+    # Which provider this session came from, for the interface to show and for
+    # logout to know whose session to end.
+    user.provider = provider.key
 
     # Roles come from the token, not the database, so they always reflect the
     # provider's current grant. Stashed on the instance for require_role; not
@@ -263,9 +305,6 @@ def require_role(role: str):
 # provider supports neither. The verifier lives only in our signed session
 # cookie, which also ties the callback to the browser that started the login.
 
-_HOSTED_LOGIN_URL = f"{OIDC_ISSUER}/login"
-
-
 def _make_pkce() -> tuple[str, str]:
     verifier = secrets.token_urlsafe(64)
     digest = hashlib.sha256(verifier.encode("ascii")).digest()
@@ -283,23 +322,42 @@ def _param_from_url(url: str, name: str) -> str | None:
     return values[0] if values else None
 
 
+@router.get("/providers")
+def providers():
+    """Which ways in this installation offers.
+
+    The interface asks rather than assuming, so adding a provider is a matter
+    of configuration and not of editing the login page.
+    """
+    return [
+        {"key": p.key, "label": p.label} for p in PROVIDERS.values()
+    ]
+
+
 @router.get("/login")
-def login(request: Request):
+def login(request: Request, provider: str | None = None):
+    if provider is not None and provider not in PROVIDERS:
+        raise HTTPException(status_code=404, detail="Böyle bir sağlayıcı yok")
+
+    chosen = provider_for(provider)
     verifier, challenge = _make_pkce()
     request.session["code_verifier"] = verifier
+    # The callback has to verify against the same provider the login started
+    # at, and the browser must not get to choose which one that was.
+    request.session["provider"] = chosen.key
 
     query = urlencode(
         {
             "response_type": "code",
-            "client_id": OIDC_CLIENT_ID,
+            "client_id": chosen.client_id,
             "redirect_uri": OIDC_REDIRECT_URI,
-            "scope": OIDC_SCOPE,
+            "scope": chosen.scope,
             "code_challenge": challenge,
             "code_challenge_method": "S256",
         }
     )
 
-    return RedirectResponse(f"{OIDC_ISSUER}/oauth/authorize?{query}", status_code=302)
+    return RedirectResponse(f"{chosen.authorize_url}?{query}", status_code=302)
 
 
 @callback_router.get("/callback")
@@ -314,11 +372,18 @@ def callback(request: Request, db: Session = Depends(get_db)):
             detail=request.query_params.get("error_description") or error,
         )
 
+    # Which provider this login started at. Read from our own signed session,
+    # never from the query string: letting the browser name the provider would
+    # let it point the code exchange at one of its choosing.
+    chosen = provider_for(request.session.get("provider"))
+
     # No provider session yet: send the browser to the provider's own login
-    # page so the password is entered there, never here.
-    if login_session and not code:
+    # page so the password is entered there, never here. Only OpenIDX takes
+    # this branch; a standard provider shows its own page and never bounces
+    # back with a login_session.
+    if login_session and not code and chosen.hosted_login_url:
         return RedirectResponse(
-            f"{_HOSTED_LOGIN_URL}?{urlencode({'login_session': login_session})}",
+            f"{chosen.hosted_login_url}?{urlencode({'login_session': login_session})}",
             status_code=302,
         )
 
@@ -335,11 +400,11 @@ def callback(request: Request, db: Session = Depends(get_db)):
 
     with httpx.Client(timeout=15) as client:
         response = client.post(
-            f"{OIDC_ISSUER}/oauth/token",
+            chosen.token_url,
             data={
                 "grant_type": "authorization_code",
-                "client_id": OIDC_CLIENT_ID,
-                "client_secret": OIDC_CLIENT_SECRET,
+                "client_id": chosen.client_id,
+                "client_secret": chosen.client_secret,
                 "code": code,
                 "redirect_uri": OIDC_REDIRECT_URI,
                 "code_verifier": verifier,
@@ -359,11 +424,11 @@ def callback(request: Request, db: Session = Depends(get_db)):
     # Prefer the id_token for identity claims: its signature is verified against
     # the JWKS. Fall back to the userinfo endpoint if none was issued.
     if id_token:
-        claims = _claims_from_jwt(id_token)
+        claims = _claims_from_jwt(id_token, chosen)
     else:
-        claims = _claims_from_userinfo(access_token)
+        claims = _claims_from_userinfo(access_token, chosen)
 
-    _upsert_user(db, claims)
+    _upsert_user(db, claims, chosen)
 
     # Keep the id_token server-side, in the signed session cookie: logout needs it
     # as the id_token_hint, and the browser never has to hold a second credential.
@@ -401,6 +466,7 @@ def me(user: User = Depends(get_current_user)):
         "acr": getattr(user, "acr", None),
         "mfa": has_mfa(user),
         "step_up_required": STEP_UP_REQUIRED,
+        "provider": getattr(user, "provider", None),
     }
 
 
@@ -413,9 +479,24 @@ def logout(request: Request):
     browser to the end_session endpoint ends that session too, so signing out
     means signing out.
     """
-    # Read the hint before clearing: the session is where it lives.
+    # Read the hint and the provider before clearing: the session is where
+    # both live.
     id_token = request.session.get("id_token")
+    chosen = provider_for(request.session.get("provider"))
     request.session.clear()
+
+    # Not every provider offers RP-initiated logout — Google does not. Saying
+    # so is better than sending the browser somewhere that will not end the
+    # session and calling it a sign-out.
+    if not chosen.logout_url:
+        return {
+            "logout_url": None,
+            "provider": chosen.key,
+            "note": (
+                f"{chosen.label} oturum sonlandırma ucu sunmuyor; yalnızca bu "
+                "uygulamadaki oturum kapatıldı."
+            ),
+        }
 
     params = {}
 
@@ -427,9 +508,9 @@ def logout(request: Request):
     if OIDC_POST_LOGOUT_REDIRECT_URI:
         params["post_logout_redirect_uri"] = OIDC_POST_LOGOUT_REDIRECT_URI
 
-    logout_url = f"{OIDC_ISSUER}/oauth/logout"
+    logout_url = chosen.logout_url
 
     if params:
         logout_url = f"{logout_url}?{urlencode(params)}"
 
-    return {"logout_url": logout_url}
+    return {"logout_url": logout_url, "provider": chosen.key}
