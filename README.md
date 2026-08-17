@@ -43,7 +43,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Yetkisiz erişim denemesinin görünmezliği | 401/403 dönen her istek `access_denied` olarak günlüğe yazılır | Panodaki "Reddedilen erişimler" grafiği |
 | Günlük satırı uydurma (CWE-117) | Günlüğe yazılan değerlerde CR/LF temizlenir (`_sanitize_log`) | Kod incelemesi |
 | Depolanmış XSS (bulgu başlığı, varlık adı, kullanıcı adı) | Kullanıcı verisi DOM'a yalnızca `textContent` ile girer | Beyaz kutu incelemede bulunup düzeltildi (PR #9) |
-| Tarayıcı tarafı saldırı yüzeyi | CSP, HSTS, `X-Frame-Options: DENY`, `nosniff`, Referrer-Policy, Permissions-Policy | Yanıt başlıkları |
+| Tarayıcı tarafı saldırı yüzeyi | **`'unsafe-inline'` içermeyen CSP** (nonce tabanlı), HSTS, `frame-ancestors 'none'`, `object-src 'none'`, `nosniff`, Referrer-Policy, Permissions-Policy | `test_csp.py` (7 test) — politikada `'unsafe-inline'` bulunmadığı ve sayfada satır içi script/stil kalmadığı sınanır |
 | Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
 | Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
 
@@ -247,13 +247,34 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 118 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 125 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
 
 Grafikler dış bir kütüphane kullanmaz, saf SVG ile çizilir — uygulamanın kendi
 Content-Security-Policy başlığı zaten dışarıdan script yüklenmesine izin vermez.
+
+### İçerik güvenlik politikası
+
+```
+default-src 'self'; script-src 'self' 'nonce-…'; style-src 'self';
+img-src 'self' data:; object-src 'none'; frame-ancestors 'none';
+base-uri 'self'; form-action 'self'
+```
+
+`'unsafe-inline'` **yok**. Onunla birlikte başlık, korumak için var olduğu
+saldırının — enjekte edilmiş satır içi script — tam olarak önünü açık
+bırakıyordu; yani vardı ama yarım çalışıyordu.
+
+Kaldırabilmek için arayüzün biçemi ve betiği ayrı dosyalara taşındı
+(`static/app.css`, `static/app.js`); `index.html` 2022 satırdan 318 satıra indi
+ve içinde tek bir satır içi `<style>`, `<script>` ya da `style="…"` kalmadı.
+
+Geriye zorunlu tek bir satır içi script kaldı: `/callback`'in token'ı tarayıcıya
+devrettiği yer. Alternatifi token'ı adres satırına koymaktı, ki o da tarayıcı
+geçmişine düşerdi. Bunun yerine her yanıt kendi **nonce**'unu üretir ve politika
+o tek script'i adıyla kabul eder — hepsini birden değil.
 Kritiklik rampası tek hue'lu sıralı bir ölçektir ve açık/koyu tema için ayrı ayrı
 doğrulanmıştır; `--danger` yalnızca "dikkat gerekiyor" (SLA aşımı) için ayrılmıştır,
 hiçbir zaman bir kritiklik seviyesi için kullanılmaz.
@@ -319,7 +340,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 118 test
+pytest                                      # 125 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
