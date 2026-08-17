@@ -241,6 +241,10 @@ function stateSelect(f, after) {
 
 let myFindings = [];
 let filter = "all";
+let query = "";
+let sevPick = "";
+let srcPick = "";
+let overdueOnly = false;
 let currentUser = null;
 
 // A closed finding is struck through, except when the risk was accepted: that
@@ -378,9 +382,22 @@ function setStats(findings) {
   document.getElementById("ringFg").style.strokeDashoffset = RING_C * (1 - pct / 100);
 }
 
+// Aranan metin başlıkta, varlıkta, açıklamada ve kuralın kimliğinde aranır —
+// bir analistin elinde genelde bunlardan biri olur: "hangi dosyaydı", "şu CVE",
+// "portal olan hangisiydi".
+function matchesQuery(f) {
+  if (!query) return true;
+  return [f.title, f.asset, f.description, f.source_ref, f.source]
+    .some(v => (v || "").toLowerCase().includes(query));
+}
+
 function renderMyList() {
   const shown = myFindings
     .filter(f => filter === "all" ? true : filter === "open" ? !isClosed(f) : isClosed(f))
+    .filter(f => !sevPick || f.severity === sevPick)
+    .filter(f => !srcPick || (f.source || "manual") === srcPick)
+    .filter(f => !overdueOnly || isOverdue(f))
+    .filter(matchesQuery)
     .sort((a, b) => {
       if (isClosed(a) !== isClosed(b)) return isClosed(a) ? 1 : -1;       // açık olanlar üstte
       if (a.severity !== b.severity) return SEV_ORDER[a.severity] - SEV_ORDER[b.severity];
@@ -393,11 +410,38 @@ function renderMyList() {
   document.getElementById("emptyState").classList.toggle("hidden", myFindings.length > 0);
   list.innerHTML = "";
   shown.forEach(f => list.appendChild(findingRow(f)));
+
+  // Süzme sonucu boş çıkabilir; bunu "hiç bulgun yok" ile karıştırmamak için
+  // sayaç her zaman kaç kaydın kaç kayıttan süzüldüğünü söyler.
+  const count = document.getElementById("matchCount");
+  count.textContent = shown.length === myFindings.length
+    ? `${myFindings.length} bulgu`
+    : `${shown.length} / ${myFindings.length} bulgu`;
+}
+
+// Kaynak listesi veriden türetilir: elde yalnızca nuclei varsa menüde yalnızca
+// nuclei görünür — hiç kullanılmamış bir seçenek sunmanın anlamı yok.
+function refreshSourceOptions() {
+  const select = document.getElementById("srcFilter");
+  const sources = [...new Set(myFindings.map(f => f.source || "manual"))].sort();
+  const current = select.value;
+  select.innerHTML = "";
+  const all = document.createElement("option");
+  all.value = ""; all.textContent = "Kaynak: hepsi";
+  select.appendChild(all);
+  sources.forEach(s => {
+    const o = document.createElement("option");
+    o.value = s; o.textContent = s;
+    select.appendChild(o);
+  });
+  select.value = sources.includes(current) ? current : "";
+  srcPick = select.value;
 }
 
 async function loadFindings() {
   myFindings = await api("/findings");
   setStats(myFindings);
+  refreshSourceOptions();
   renderMyList();
 }
 
@@ -412,6 +456,15 @@ function setupFilters() {
   });
 }
 setupFilters();
+
+function setupFilterBar() {
+  const search = document.getElementById("searchInput");
+  search.oninput = () => { query = search.value.trim().toLowerCase(); renderMyList(); };
+  document.getElementById("sevFilter").onchange = e => { sevPick = e.target.value; renderMyList(); };
+  document.getElementById("srcFilter").onchange = e => { srcPick = e.target.value; renderMyList(); };
+  document.getElementById("overdueOnly").onchange = e => { overdueOnly = e.target.checked; renderMyList(); };
+}
+setupFilterBar();
 
 async function remove(f) {
   await api("/findings/" + f.id, { method: "DELETE" });
