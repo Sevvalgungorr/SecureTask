@@ -55,6 +55,7 @@ iptal edilse bile token süresi dolana kadar geçerli kalır.
 ### Tarama çıktısı içe aktarma
 
 ```bash
+# Web taraması
 nuclei -u https://hedef -jsonl -o scan.jsonl
 curl -X POST http://localhost:8000/import/nuclei \
      -H "Authorization: Bearer $TOKEN" --data-binary @scan.jsonl
@@ -74,6 +75,28 @@ bir ekibe aktarılan tarama, aynı çıktıyı iki kişi yüklese de tek bulgu �
 | Açık / Triyaj | Dokunulmaz — **kritikliği de değişmez.** Biri "yüksek"i bilerek "düşük"e çektiyse, sonraki tarama bunu veto edemez |
 | Düzeltildi | **Yeniden açılır** ve yeni SLA alır — kanıt, işaretin aksini söylüyor |
 | Risk kabul | **Dokunulmaz.** Taramanın onu yine görmesi, o kararın beklenen sonucudur; ikinci faktör istemiş bir kararı bir içe aktarma sessizce geri alamaz |
+
+#### Kod taraması (SARIF)
+
+```bash
+semgrep --config auto --sarif -o scan.sarif      # ya da bandit -f sarif, CodeQL, gitleaks
+curl -X POST http://localhost:8000/import/sarif \
+     -H "Authorization: Bearer $TOKEN" --data-binary @scan.sarif
+# {"tool":"semgrep","created":12,"unchanged":217,...}
+```
+
+SARIF, kod tarama araçlarının ortak formatıdır; tek okuyucu Semgrep, Bandit,
+CodeQL, gitleaks ve GitHub code scanning çıktılarını kapsar. Burada **varlık bir
+dosyadır** — ağ taramasında bir ana bilgisayar neyse o: sorunun üzerinde
+yaşadığı şey. Böylece aynı kural aynı dosyada elli kez tetiklense de tek bulgu
+olarak takip edilir.
+
+**Tarama burada çalışmaz.** Rapor, kodun zaten bulunduğu yerde üretilir —
+geliştiricinin makinesinde ya da kendi CI hattında — ve buraya yalnızca
+bulgular gelir. Bir depoyu klonlayıp taramak, güvenilmeyen kodu çalıştırmak ve
+başkasının kaynak kodunu barındırmak demektir; takip aracının bu sorumluluğu
+üstlenmesi için bir sebep yoktur ve bu alandaki ciddi araçların tamamı aynı
+şekilde çalışır.
 
 Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmış bir
 kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
@@ -217,14 +240,14 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⚖️ **Görev ayrılığı** — riski yalnızca ekibin risk sahibi kabul edebilir ve o kişi bulguyu bildiren olamaz
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
 - 📝 **Risk kabul kütüğü** — gerekçe ve bitiş tarihi zorunlu (en fazla 90 gün); süre dolunca bulgu kendiliğinden yeniden açılır
-- 📥 **Tarama çıktısı içe aktarma** — nuclei JSON/JSONL; yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
+- 📥 **Tarama raporu içe aktarma** — web için nuclei (JSON/JSONL), kod için **SARIF** (Semgrep, Bandit, CodeQL, gitleaks); yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
 - 📡 **İzleme** — kayıtlı varlıklarda TLS sertifikası süresi, erişilebilirlik ve güvenlik başlıkları; bozulan kontrol bulgu açar, düzelen kontrol kendi bulgusunu kapatır
 - 👤 **Kapsamlı erişim** — herkes kendi bulgularını ve ekiplerinin bulgularını görür, başkasınınkini değil
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 105 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 118 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -296,7 +319,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 105 test
+pytest                                      # 118 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -319,7 +342,8 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `PUT` | `/findings/{id}/assignee` | Bearer (ekip üyesi) |
 | `POST` `GET` | `/teams` | Bearer |
 | `POST` `DELETE` | `/teams/{id}/members`, `/teams/{id}/members/{user_id}` | Yalnızca `risk_owner` |
-| `POST` | `/import/nuclei` (`?team_id=`) | Bearer (tarama çıktısı) |
+| `POST` | `/import/nuclei` (`?team_id=`) | Bearer (web tarama raporu) |
+| `POST` | `/import/sarif` (`?team_id=`) | Bearer (kod tarama raporu) |
 | `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
 | `POST` | `/monitor/run` (`?team_id=`) | Bearer (kendi varlıkları) |
 | `POST` | `/risk/expire` | Bearer (süresi dolan kabulleri yeniden açar) |
@@ -355,7 +379,7 @@ app/
   auth.py       # OIDC giriş + token doğrulama
   models.py     # veritabanı tabloları (Finding, Team, TeamMember, User, AuditLog)
   audit.py      # denetim günlüğü: ekleme-yalnız hash zinciri + doğrulama
-  importers.py  # tarayıcı çıktısı ayrıştırma (nuclei)
+  importers.py  # tarama raporu ayrıştırma (nuclei, SARIF)
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı

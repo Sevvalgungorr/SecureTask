@@ -577,7 +577,7 @@
         </li>
         <li>
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.87"/></svg></span>
-          <div><b>Rol bazlı yetkilendirme</b><span>Herkes yalnızca kendi bulgusunu görür; yönetim uçları ayrıdır</span></div>
+          <div><b>Ekip ve görev ayrılığı</b><span>Bulgu ekibindir; riski yalnızca risk sahibi kabul eder, bildiren kabul edemez</span></div>
         </li>
         <li>
           <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 12h6M9 16h4"/></svg></span>
@@ -702,10 +702,11 @@
       </form>
 
       <div class="import-row">
-        <span>veya bir <b>nuclei</b> tarama çıktısı yükle</span>
+        <span>veya bir tarama raporu yükle — <b>nuclei</b> (web) ya da <b>SARIF</b> (kod:
+          Semgrep, Bandit, CodeQL)</span>
         <!-- Gizli input + label: dosya seçicinin varsayılan görünümü sayfanın
              geri kalanıyla uyuşmuyor, davranışı ise aynen korunuyor. -->
-        <input type="file" id="importInput" accept=".json,.jsonl,.txt,application/json" class="hidden">
+        <input type="file" id="importInput" accept=".json,.jsonl,.sarif,.txt,application/json" class="hidden">
         <label class="btn ghost sm" for="importInput" id="importLabel">Dosya seç…</label>
         <span class="import-note" id="importNote"></span>
       </div>
@@ -1297,13 +1298,19 @@ document.getElementById("importInput").onchange = async (e) => {
     // Taramanın nereye düşeceğini de yukarıdaki ekip seçimi belirler: sonuç,
     // tarayıcıyı çalıştıran kişinin değil, işi yapacak ekibin olmalı.
     const team = document.getElementById("teamInput").value;
-    const path = "/import/nuclei" + (team ? "?team_id=" + team : "");
-    const r = await api(path, { method: "POST", body: await file.text() });
+    const body = await file.text();
+    // Hangi uca gideceğini dosyanın kendisi söylüyor: SARIF bir JSON nesnesidir
+    // ve "runs" dizisi taşır; nuclei ise şablon kimliği olan kayıtlar üretir.
+    // Kullanıcıya "bu hangi format" diye sormak, cevabı dosyada yazarken
+    // gereksiz bir soru olurdu.
+    const endpoint = /"runs"\s*:/.test(body.slice(0, 4000)) ? "sarif" : "nuclei";
+    const path = "/import/" + endpoint + (team ? "?team_id=" + team : "");
+    const r = await api(path, { method: "POST", body });
     note.textContent =
-      `${r.created} yeni · ${r.reopened} yeniden açıldı · ${r.unchanged} değişmedi` +
+      `${r.tool}: ${r.created} yeni · ${r.reopened} yeniden açıldı · ${r.unchanged} değişmedi` +
       (r.kept_accepted ? ` · ${r.kept_accepted} risk kabul korundu` : "") +
       (r.skipped ? ` · ${r.skipped} okunamadı` : "");
-    toast(`${r.created} bulgu içe aktarıldı`);
+    toast(`${r.created} bulgu içe aktarıldı (${r.tool})`);
     loadFindings();
   } catch (err) {
     note.textContent = err.message;

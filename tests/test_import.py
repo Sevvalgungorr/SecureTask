@@ -60,7 +60,7 @@ def test_rescanning_does_not_duplicate(client):
     _post(client, [_result()])
 
     second = _post(client, [_result()]).json()
-    assert second == {"created": 0, "reopened": 0, "escalated": 0,
+    assert second == {"tool": "nuclei", "created": 0, "reopened": 0, "escalated": 0,
                       "unchanged": 1, "kept_accepted": 0, "skipped": 0}
     assert len(client.get("/findings").json()) == 1
 

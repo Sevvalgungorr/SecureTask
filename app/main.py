@@ -22,7 +22,7 @@ from app.auth import (
 )
 from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
-from app.importers import parse_nuclei
+from app.importers import parse_nuclei, parse_sarif
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
 from app.models import (
     ACCEPTED_RISK,
@@ -54,10 +54,12 @@ from app.schemas import (
 app = FastAPI(
     title="SecureTask",
     description=(
-        "OpenID Connect ile korunan güvenlik bulgusu takip API'si: bulgular, "
-        "kritiklik, SLA ve denetlenebilir durum değişiklikleri."
+        "OpenID Connect ile korunan güvenlik bulgusu takip API'si: ekipler, "
+        "bulgular, kritiklik, SLA ve denetlenebilir durum değişiklikleri. "
+        "Bir bulgunun riskini yalnızca ekibin risk sahibi kabul edebilir ve "
+        "o kişi bulguyu bildiren olamaz."
     ),
-    version="2.0.0",
+    version="2.1.0",
     # The stock docs page pulls Swagger UI from a public CDN, which this
     # application's own Content-Security-Policy forbids — so it rendered blank.
     # Replaced below with the same page served from our own files.
@@ -779,39 +781,29 @@ def _scope(user: User, team_id: int | None):
     return Finding.team_id == team_id
 
 
-@app.post("/import/nuclei")
-async def import_nuclei(
-    request: Request,
-    team_id: int | None = None,
-    user: User = Depends(get_current_user),
-    db: Session = Depends(get_db),
-):
-    """Ingest a nuclei scan.
+def _ingest(
+    db: Session,
+    user: User,
+    team_id: int | None,
+    results: list,
+    tool: str,
+    skipped: int,
+) -> dict:
+    """Fold a scan's results into findings, whichever tool produced them.
 
-    Re-running a scan is normal, so the import is idempotent on
-    `(owner, asset, source_ref)`. What it may do to an existing finding is
-    deliberately narrow:
+    Shared by every importer, because the rules are about what a report may do
+    to a decision — not about who wrote the report:
 
-    * a finding closed as **fixed** that the scanner still sees is **reopened** —
+    * a finding closed as **fixed** that the tool still sees is **reopened** —
       the evidence says it was not fixed;
-    * a finding whose risk was **accepted** is left exactly as it is. The scanner
-      finding it again is the expected outcome of that decision, not news, and
-      an import must not quietly undo a decision that required a second factor;
-    * an already-open finding is left alone — including its severity. If someone
-      triaged a high down to low, the next scan does not get to overrule them.
-
-    So a scan can add work and can prove that work was not finished. It cannot
-    erase a judgement.
+    * a finding whose risk was **accepted** is left exactly as it is. Seeing it
+      again is the expected outcome of that decision, not news, and an import
+      must not quietly undo a decision that required a second factor and a
+      second person;
+    * an already-open finding keeps its severity unless the *tool's own* rating
+      has risen. Someone who triaged a high down to low is not overruled by a
+      scanner repeating itself.
     """
-    if team_id is not None:
-        _require_membership(db, user, team_id)
-
-    raw = (await request.body()).decode("utf-8", errors="replace")
-    results, skipped = parse_nuclei(raw)
-
-    if not results and not skipped:
-        raise HTTPException(status_code=400, detail="Okunabilir tarama sonucu yok")
-
     created = reopened = escalated = unchanged = kept_accepted = 0
 
     for result in results:
@@ -833,7 +825,7 @@ async def import_nuclei(
                 severity=result.severity,
                 status="open",
                 due_date=_sla_due_date(result.severity),
-                source="nuclei",
+                source=tool,
                 source_ref=result.source_ref,
                 source_severity=result.severity,
                 owner_id=user.id,
@@ -846,14 +838,12 @@ async def import_nuclei(
                 user,
                 "created",
                 finding.id,
-                f"{finding.title} · severity {finding.severity} · nuclei ile içe aktarıldı",
+                f"{finding.title} · severity {finding.severity} · {tool} ile içe aktarıldı",
             )
             created += 1
         elif existing.status == ACCEPTED_RISK:
             kept_accepted += 1
         else:
-            # Same rule as the monitor: the scanner's own rating going up is new
-            # evidence, the scanner repeating itself is not.
             escalated_from = _escalate_from_source(existing, result.severity)
 
             if existing.status == "fixed":
@@ -862,38 +852,31 @@ async def import_nuclei(
                 # old one would file it as overdue the moment it reopens.
                 existing.due_date = _sla_due_date(existing.severity)
                 _record_audit(
-                    db,
-                    user,
-                    "updated",
-                    existing.id,
+                    db, user, "updated", existing.id,
                     f"{existing.title} · status fixed→open · tarama hâlâ görüyor",
                 )
                 reopened += 1
             elif escalated_from is not None:
                 existing.due_date = _sla_due_date(existing.severity)
                 _record_audit(
-                    db,
-                    user,
-                    "updated",
-                    existing.id,
-                    f"{existing.title} · severity {escalated_from}→{existing.severity} · nuclei",
+                    db, user, "updated", existing.id,
+                    f"{existing.title} · severity {escalated_from}→{existing.severity} · {tool}",
                 )
                 escalated += 1
             else:
                 unchanged += 1
 
     summary = (
-        f"nuclei: {created} yeni · {reopened} yeniden açıldı · {escalated} yükseltildi "
+        f"{tool}: {created} yeni · {reopened} yeniden açıldı · {escalated} yükseltildi "
         f"· {unchanged} değişmedi · {kept_accepted} risk kabul (korundu) "
         f"· {skipped} okunamadı"
     )
     # finding_id is None: this entry is about the import, not one finding.
-    audit.append(
-        db, user_id=user.id, action="imported", detail=_sanitize_log(summary)
-    )
+    audit.append(db, user_id=user.id, action="imported", detail=_sanitize_log(summary))
     db.commit()
 
     return {
+        "tool": tool,
         "created": created,
         "reopened": reopened,
         "escalated": escalated,
@@ -901,6 +884,57 @@ async def import_nuclei(
         "kept_accepted": kept_accepted,
         "skipped": skipped,
     }
+
+
+@app.post("/import/nuclei")
+async def import_nuclei(
+    request: Request,
+    team_id: int | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ingest a nuclei scan (JSON array or one object per line)."""
+    if team_id is not None:
+        _require_membership(db, user, team_id)
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    results, skipped = parse_nuclei(raw)
+
+    if not results and not skipped:
+        raise HTTPException(status_code=400, detail="Okunabilir tarama sonucu yok")
+
+    return _ingest(db, user, team_id, results, "nuclei", skipped)
+
+
+@app.post("/import/sarif")
+async def import_sarif(
+    request: Request,
+    team_id: int | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ingest a code-scanning report in SARIF.
+
+    Semgrep, Bandit, CodeQL, gitleaks and GitHub code scanning all emit SARIF,
+    so one reader covers the category. The scan itself runs where the code
+    already is — a developer's machine or their pipeline — and only the report
+    is sent here. Cloning a repository to scan it would mean executing
+    untrusted code and holding someone else's source; the tracker has no
+    reason to take that on, and every serious tool in this space works the
+    same way.
+    """
+    if team_id is not None:
+        _require_membership(db, user, team_id)
+
+    raw = (await request.body()).decode("utf-8", errors="replace")
+    results, skipped, tool = parse_sarif(raw)
+
+    if not results and not skipped:
+        raise HTTPException(
+            status_code=400, detail="Okunabilir SARIF sonucu yok"
+        )
+
+    return _ingest(db, user, team_id, results, tool, skipped)
 
 
 # --- Monitoring: registered assets, and the checks run against them --------
