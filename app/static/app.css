@@ -247,6 +247,25 @@
   .chip:hover { color: var(--ink); }
   .chip.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
 
+  /* Filtre çubuğu: bir envanterin ilk ihtiyacı, onu daraltabilmek. Hepsi
+     istemci tarafında — liste zaten bellekte, sunucuya gitmek gecikme katardı. */
+  .filterbar {
+    display: flex; gap: .5rem; align-items: center; flex-wrap: wrap;
+    margin: 0 .25rem .8rem;
+  }
+  .search {
+    font: inherit; font-size: .86rem; flex: 1; min-width: 12rem;
+    color: var(--ink); background: var(--card); border: 1px solid var(--line);
+    border-radius: 10px; padding: .4rem .7rem; outline: none;
+  }
+  .search:focus { border-color: var(--accent); }
+  .search::placeholder { color: var(--faint); }
+  .overdue-toggle {
+    display: inline-flex; align-items: center; gap: .35rem;
+    font-size: .82rem; color: var(--muted); cursor: pointer; white-space: nowrap;
+  }
+  .match-count { font-size: .8rem; color: var(--faint); font-variant-numeric: tabular-nums; }
+
   ul.findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
   li.finding {
     display: flex; align-items: center; gap: .85rem; background: var(--card);

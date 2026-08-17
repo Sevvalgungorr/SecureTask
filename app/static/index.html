@@ -192,6 +192,25 @@
           <button class="chip" data-f="closed" type="button">Kapalı</button>
         </div>
       </div>
+
+      <div class="filterbar">
+        <input id="searchInput" class="search" type="search" autocomplete="off"
+               placeholder="Ara — başlık, varlık, kural…">
+        <select id="sevFilter" class="mini-select" title="Kritiklik">
+          <option value="">Kritiklik: hepsi</option>
+          <option value="critical">Kritik</option>
+          <option value="high">Yüksek</option>
+          <option value="medium">Orta</option>
+          <option value="low">Düşük</option>
+        </select>
+        <select id="srcFilter" class="mini-select" title="Kaynak">
+          <option value="">Kaynak: hepsi</option>
+        </select>
+        <label class="overdue-toggle">
+          <input type="checkbox" id="overdueOnly"> yalnızca SLA aşımı
+        </label>
+        <span class="match-count" id="matchCount"></span>
+      </div>
       <ul class="findings" id="findingList"></ul>
       <div class="empty hidden" id="emptyState">
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
