@@ -28,6 +28,8 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Tehdit | Kontrol | Nasıl doğrulandı |
 | --- | --- | --- |
 | Parolanın uygulamaya girilmesi / çalınması | OIDC ile SSO — parola yalnızca sağlayıcıya girilir, PKCE (S256) | Uçtan uca giriş akışı, `test_logout.py` |
+| Token'ın yanlış sağlayıcının anahtarlarıyla doğrulanması | `iss` **doğrulanmadan** yalnızca anahtar setini seçer; imza o sağlayıcının anahtarlarıyla doğrulanır, `iss` doğrulamadan **sonra tekrar** kontrol edilir | `test_providers.py` (12 test) |
+| Tarayıcının hangi sağlayıcıya gidileceğini seçmesi | Sağlayıcı imzalı oturum çerezinde saklanır; `/callback` onu sorgu dizesinden değil oradan okur | `test_providers.py` |
 | Sahte veya kurcalanmış token | `id_token`/erişim token'ı JWKS ile yerel doğrulama (RS256 sabitlenmiş) | Manuel pentest: forge/tamper → 401 |
 | Başkasının bulgu envanterini okuma (IDOR) | Her sorgu kişinin **kendi** ve **ekiplerinin** bulgularıyla sınırlı; dışarıdaki kayıt **404** döner, 403 değil | `test_findings.py::test_findings_are_isolated_per_user` · `test_teams.py::test_someone_outside_the_team_sees_nothing` |
 | Riski bildirenin kendi kararını onaylaması | **Görev ayrılığı**: bir bulgunun riskini yalnızca ekibin `risk_owner` rolündeki biri kabul edebilir — ve o kişi bulguyu **bildiren** olamaz | `test_teams.py::test_the_reporter_cannot_accept_their_own_finding` |
@@ -247,13 +249,45 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 125 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 137 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
 
 Grafikler dış bir kütüphane kullanmaz, saf SVG ile çizilir — uygulamanın kendi
 Content-Security-Policy başlığı zaten dışarıdan script yüklenmesine izin vermez.
+
+### Birden fazla kimlik sağlayıcısı
+
+```bash
+curl http://localhost:8000/auth/providers
+# [{"key":"openidx","label":"OpenIDX"},{"key":"google","label":"Google"}]
+```
+
+Giriş ekranı düğmelerini bu uçtan üretir; bir sağlayıcı eklemek **yapılandırma
+işidir**, giriş sayfasını düzenleme işi değil. Google yalnızca
+`GOOGLE_CLIENT_ID` ve `GOOGLE_CLIENT_SECRET` doluysa görünür — yapılandırılmamış
+bir kurulum tek düğme gösterir, bozuk bir düğme değil.
+
+Bu bir kolaylık özelliği değil. Tek kapısı bir sağlayıcı olan bir takip aracı, o
+sağlayıcının kötü bir gün geçirdiği anda yok olur — ki bu varsayımsal değil:
+sağlayıcıdaki bir kimlik doğrulama regresyonu bu uygulamayı iki hafta
+erişilemez bıraktı.
+
+**Hangi anahtarla doğrulanacağı.** Bir token geldiğinde `iss` alanı
+**doğrulanmadan** okunur — yalnızca hangi anahtar setine bakılacağını seçmek
+için, ki bu her yerde yapılan standart anahtar keşfidir. İmza o sağlayıcının
+anahtarlarıyla doğrulanır ve `iss`, doğrulamadan **sonra tekrar** kontrol edilir.
+Uydurma bir `iss` böylece yalnızca imzasını doğrulayamayacak bir anahtar seti
+seçmiş olur.
+
+Akışın hangi sağlayıcıda başladığı **imzalı oturum çerezinde** tutulur;
+`/callback` bunu sorgu dizesinden okumaz — okusaydı tarayıcı, kod değişimini
+kendi seçtiği bir sağlayıcıya yönlendirebilirdi.
+
+Google **RP-initiated logout sunmuyor**. Çıkışta `logout_url: null` ve bir not
+dönüyor: bu uygulamadaki oturum kapatıldı, Google oturumu kapatılamadı.
+Kapanmamış bir oturumu kapanmış gibi göstermek, söylememekten kötü olurdu.
 
 ### İçerik güvenlik politikası
 
@@ -340,7 +374,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 125 test
+pytest                                      # 137 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -358,6 +392,7 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | Metod | Yol | Erişim |
 | --- | --- | --- |
 | `GET` | `/auth/login`, `/callback` | Giriş akışı |
+| `GET` | `/auth/providers` | Herkese açık (giriş yolları) |
 | `GET` | `/auth/me`, `/auth/logout` | Bearer |
 | `POST` `GET` `PUT` `DELETE` | `/findings`, `/findings/{id}` | Bearer (kendi + ekibininkiler) |
 | `PUT` | `/findings/{id}/assignee` | Bearer (ekip üyesi) |

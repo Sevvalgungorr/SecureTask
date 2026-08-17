@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 
 
 def _required(name: str) -> str:
@@ -8,6 +9,35 @@ def _required(name: str) -> str:
         raise RuntimeError(f"{name} environment variable is not set")
 
     return value
+
+
+@dataclass(frozen=True)
+class Provider:
+    """One identity provider this installation will accept a login from.
+
+    Multiple providers are not a convenience feature. A tracker whose only way
+    in is a single provider stops being usable the moment that provider has a
+    bad day — which is not hypothetical here: an authentication-flow regression
+    at the provider left this application unreachable for two weeks.
+    """
+
+    key: str
+    label: str
+    issuer: str
+    client_id: str
+    client_secret: str
+    audience: str
+    scope: str
+    authorize_url: str
+    token_url: str
+    jwks_url: str
+    userinfo_url: str
+    # Not every provider implements RP-initiated logout; Google does not.
+    logout_url: str | None = None
+    # OpenIDX bounces an unauthenticated browser back with ?login_session=…
+    # instead of showing a login page, so its own page has to be addressed
+    # directly. Standard providers leave this unset.
+    hosted_login_url: str | None = None
 
 
 OIDC_ISSUER = os.getenv("OIDC_ISSUER", "https://openidx.tdv.org")
@@ -73,6 +103,58 @@ MONITOR_ALLOW_PRIVATE = os.getenv("MONITOR_ALLOW_PRIVATE", "false").lower() == "
 # A check waits this long before giving up. Short: an unreachable host is a
 # finding, not a reason to hold the request open.
 MONITOR_TIMEOUT_SECONDS = float(os.getenv("MONITOR_TIMEOUT_SECONDS", "8"))
+
+# --- The providers this installation accepts -------------------------------
+
+OPENIDX = Provider(
+    key="openidx",
+    label="OpenIDX",
+    issuer=OIDC_ISSUER,
+    client_id=OIDC_CLIENT_ID,
+    client_secret=OIDC_CLIENT_SECRET,
+    audience=OIDC_AUDIENCE,
+    scope=OIDC_SCOPE,
+    authorize_url=f"{OIDC_ISSUER}/oauth/authorize",
+    token_url=f"{OIDC_ISSUER}/oauth/token",
+    jwks_url=f"{OIDC_ISSUER}/.well-known/jwks.json",
+    userinfo_url=f"{OIDC_ISSUER}/oauth/userinfo",
+    logout_url=f"{OIDC_ISSUER}/oauth/logout",
+    hosted_login_url=f"{OIDC_ISSUER}/login",
+)
+
+# Google is a plain OpenID Connect provider: discovery, JWKS, id_token, PKCE.
+# It is here as the second way in, and it only appears when credentials for it
+# exist — an installation that has not configured it shows one button, not a
+# broken one.
+GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "")
+GOOGLE_CLIENT_SECRET = os.getenv("GOOGLE_CLIENT_SECRET", "")
+
+GOOGLE = Provider(
+    key="google",
+    label="Google",
+    issuer="https://accounts.google.com",
+    client_id=GOOGLE_CLIENT_ID,
+    client_secret=GOOGLE_CLIENT_SECRET,
+    audience=GOOGLE_CLIENT_ID,
+    scope="openid email profile",
+    authorize_url="https://accounts.google.com/o/oauth2/v2/auth",
+    token_url="https://oauth2.googleapis.com/token",
+    jwks_url="https://www.googleapis.com/oauth2/v3/certs",
+    userinfo_url="https://openidconnect.googleapis.com/v1/userinfo",
+    # Google has no RP-initiated logout endpoint; signing out of this
+    # application cannot end the Google session, and pretending otherwise
+    # would be worse than saying so.
+    logout_url=None,
+)
+
+PROVIDERS: dict[str, Provider] = {OPENIDX.key: OPENIDX}
+
+if GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET:
+    PROVIDERS[GOOGLE.key] = GOOGLE
+
+# The one a bare /auth/login uses, and the one an opaque (non-JWT) token is
+# assumed to have come from.
+DEFAULT_PROVIDER = OPENIDX.key
 
 # Signs the short-lived session cookie that carries the PKCE code_verifier
 # between /auth/login and /callback.
