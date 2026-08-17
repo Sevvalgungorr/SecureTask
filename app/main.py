@@ -1,3 +1,4 @@
+import secrets
 import time
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
@@ -109,6 +110,11 @@ app.include_router(callback_router)
 # hardening step that costs nothing and breaks nothing.
 @app.middleware("http")
 async def security_headers(request, call_next):
+    # A fresh nonce per response. The interface itself needs none — its script
+    # and styles are files now — but the callback has one unavoidable inline
+    # script, and a nonce lets exactly that one run without reopening the door
+    # for every other inline script an injection might introduce.
+    request.state.csp_nonce = secrets.token_urlsafe(16)
     response = await call_next(request)
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["X-Frame-Options"] = "DENY"
@@ -118,14 +124,18 @@ async def security_headers(request, call_next):
     # Permissions-Policy: uygulamanın hiç kullanmadığı güçlü tarayıcı
     # yeteneklerini (konum/mikrofon/kamera) kapatır.
     response.headers["Permissions-Policy"] = "geolocation=(), microphone=(), camera=()"
-    # CSP: içeriğin nereden yüklenebileceğini kısıtlar. 'unsafe-inline' gerekli,
-    # çünkü tek dosyalık arayüz satır-içi <style>/<script> kullanıyor; ideali
-    # bunları ayrı dosyalara taşıyıp 'unsafe-inline'ı kaldırmaktır.
+    # CSP: içeriğin nereden yüklenebileceğini kısıtlar. 'unsafe-inline' yok —
+    # onunla birlikte başlık, korumak için var olduğu saldırının (enjekte edilen
+    # satır içi script) tam olarak önünü açık bırakıyordu. Arayüzün betikleri ve
+    # biçemleri artık ayrı dosyalarda; geriye kalan tek satır içi script
+    # (/callback'in token devri) nonce ile adlandırılarak çalışıyor.
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "script-src 'self' 'unsafe-inline'; "
-        "style-src 'self' 'unsafe-inline'; "
+        f"script-src 'self' 'nonce-{request.state.csp_nonce}'; "
+        "style-src 'self'; "
         "img-src 'self' data:; "
+        "object-src 'none'; "
+        "frame-ancestors 'none'; "
         "base-uri 'self'; "
         "form-action 'self'"
     )

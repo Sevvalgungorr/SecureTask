@@ -372,9 +372,15 @@ def callback(request: Request, db: Session = Depends(get_db)):
 
     # Hand the token to the browser front-end: stash it and go to the app page.
     # (json.dumps safely quotes the token for embedding in the script.)
+    #
+    # This is the application's only inline script, and it stays inline on
+    # purpose: the alternative is putting the token in the URL, where it would
+    # land in browser history. It carries the response's CSP nonce, so the
+    # policy admits this one script by name rather than admitting all of them.
+    nonce = request.state.csp_nonce
     handoff = (
         '<!doctype html><meta charset="utf-8">'
-        "<script>"
+        f'<script nonce="{nonce}">'
         f"localStorage.setItem('securetask_token', {json.dumps(access_token)});"
         "location.replace('/app');"
         "</script>Giriş yapılıyor…"

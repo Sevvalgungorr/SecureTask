@@ -1,0 +1,560 @@
+  :root {
+    --bg: #f4f3f9;
+    --mesh: radial-gradient(680px 420px at 12% -8%, rgba(124,58,237,.13), transparent 60%),
+            radial-gradient(620px 420px at 104% 4%, rgba(59,130,246,.12), transparent 58%);
+    --card: #ffffff;
+    --ink: #1b1830;
+    --muted: #6a6780;
+    --faint: #9b98ad;
+    --line: #e9e6f1;
+    --line-2: #f1eff7;
+    --accent: #6d3bf5;
+    --accent-2: #4f46e5;
+    --ok: #10b981;
+    --ok-soft: #e5f6ef;
+    --warn: #4f46e5;
+    --danger: #f43f5e;
+    --accent-soft: #efeaff;
+    --accent-ink: #ffffff;
+    /* Ordinal ramp for severity: one hue, light -> dark as severity rises.
+       Re-stepped from three to four when `critical` was added, then validated
+       against the card surface (monotone lightness, >=0.06 steps, light end
+       clears 2:1 contrast). Not interchangeable with status colors: --danger
+       stays reserved for "needs attention" (an SLA breach), never for a level. */
+    --sev-1: #a78bfa;
+    --sev-2: #8b5cf6;
+    --sev-3: #6d28d9;
+    --sev-4: #4c1d95;
+    --sh-sm: 0 1px 2px rgba(24,20,48,.05);
+    --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
+    --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0c0a15;
+      --mesh: radial-gradient(680px 420px at 12% -8%, rgba(124,58,237,.18), transparent 60%),
+              radial-gradient(620px 420px at 104% 4%, rgba(59,130,246,.14), transparent 58%);
+      --card: #16131f;
+      --ink: #ece9f6;
+      --muted: #9d98af;
+      --faint: #635d76;
+      --line: #262133;
+      --line-2: #1f1b2b;
+      --accent: #9d7bff;
+      --accent-2: #7c8cff;
+      --ok: #34d399;
+      --ok-soft: #16281f;
+      --warn: #7c8cff;
+      --danger: #fb7185;
+      --accent-soft: #201a38;
+      --accent-ink: #100c1c;
+      /* Re-stepped for the dark surface, not flipped: on dark, higher severity
+         reads lighter. Validated the same way against the dark card. */
+      --sev-1: #5b34c4;
+      --sev-2: #8257ee;
+      --sev-3: #a78bfa;
+      --sev-4: #cbb9ff;
+      --sh-sm: 0 1px 2px rgba(0,0,0,.4);
+      --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
+      --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0; color: var(--ink); background: var(--bg); background-image: var(--mesh);
+    background-attachment: fixed; background-repeat: no-repeat;
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    line-height: 1.5; -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .finding, .btn, .stat-pill, .chip, .tab, .icon-btn, .ring-fg { transition: all .2s cubic-bezier(.4,0,.2,1); }
+    @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+    li.finding { animation: rise .28s ease both; }
+  }
+
+  header {
+    position: sticky; top: 0; z-index: 20;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .8rem 1.15rem;
+    background: color-mix(in srgb, var(--card) 72%, transparent);
+    backdrop-filter: saturate(140%) blur(14px);
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: .6rem; font-weight: 700; font-size: 1.12rem; letter-spacing: -.02em; }
+  .brand .logo {
+    width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+    box-shadow: 0 6px 16px -6px var(--accent);
+  }
+  .brand .logo svg { width: 18px; height: 18px; }
+  .brand b { background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent; }
+  .who { display: flex; align-items: center; gap: .55rem; }
+  .avatar {
+    width: 32px; height: 32px; border-radius: 50%; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff;
+    font-weight: 700; font-size: .84rem; box-shadow: 0 4px 12px -4px var(--accent);
+  }
+  .who .name { font-size: .9rem; font-weight: 600; color: var(--ink); max-width: 34vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .role-badge {
+    font-size: .6rem; font-weight: 800; text-transform: uppercase; letter-spacing: .07em;
+    color: var(--accent); background: var(--accent-soft); padding: .14rem .4rem; border-radius: 5px;
+  }
+
+  main { max-width: 1240px; margin: 0 auto; padding: 1.6rem 1.15rem 5rem; }
+  /* Bir yapılacaklar listesi tek dar sütunda iyi okunur; grafikleri, ekipleri ve
+     denetim günlüğü olan bir pano okunmaz — genişlik ister. Sınır kalktı; dar
+     kalması gereken tek şey (bulgu ekleme formu) kendi sınırını taşıyor. */
+  #appView { margin: 0 auto; }
+
+  /* Pano: iki grafiği yan yana koyacak kadar yer varsa koy. */
+  /* minmax(0,…) şart: çıplak bir 1fr, içeriğinin min-content genişliğinin
+     altına inemez — grafikler ezilir, metin sütunu her şeyi iter. */
+  .dash-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+               gap: 1.4rem; margin-bottom: 1.9rem; align-items: start; }
+  .dash-grid > .admin-block { margin-bottom: 0; }
+  @media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 1.1rem; } }
+
+  /* Geniş ekranda bir bulgu satırı: başlık solda, ölçüler sağda hizalı. Kart
+     yığını yerine tabloya yakın bir okuma — envanter böyle taranır. */
+  @media (min-width: 900px) {
+    li.finding .meta { margin-top: 0; flex-shrink: 0; justify-content: flex-end; }
+    li.finding > .body { display: flex; align-items: center; gap: .9rem; }
+    li.finding .body > .title-wrap { flex: 1; min-width: 0; }
+    .add { max-width: 760px; }
+    .import-row { max-width: 760px; }
+  }
+
+  .btn {
+    font: inherit; font-weight: 600; cursor: pointer; border: none; border-radius: 11px;
+    /* Also used on <a>, which would otherwise arrive underlined and inline. */
+    display: inline-block; text-align: center; text-decoration: none;
+    padding: .62rem 1.1rem; color: var(--accent-ink);
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    box-shadow: 0 8px 20px -8px var(--accent);
+  }
+  .btn:hover { filter: brightness(1.06); transform: translateY(-1px); box-shadow: 0 12px 26px -8px var(--accent); }
+  .btn:active { transform: translateY(0); }
+  .btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .btn.ghost { background: transparent; color: var(--muted); border: 1px solid var(--line); box-shadow: none; }
+  .btn.ghost:hover { color: var(--ink); background: var(--line-2); transform: none; box-shadow: none; }
+  .btn.sm { padding: .34rem .7rem; font-size: .82rem; border-radius: 8px; }
+
+  /* summary hero */
+  .summary {
+    display: flex; align-items: center; gap: 1rem; justify-content: space-between;
+    background: var(--card); border: 1px solid var(--line); border-radius: 20px;
+    padding: 1.3rem 1.4rem; box-shadow: var(--sh); margin-bottom: 1.3rem;
+  }
+  .summary .hello { font-size: 1.32rem; font-weight: 800; letter-spacing: -.03em; margin: 0 0 .15rem; }
+  .summary .sub { color: var(--muted); font-size: .9rem; margin: 0 0 .8rem; }
+  .stat-pills { display: flex; gap: .5rem; flex-wrap: wrap; }
+  .stat-pill {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .82rem; color: var(--muted);
+    background: var(--line-2); border: 1px solid var(--line); border-radius: 999px; padding: .22rem .7rem;
+  }
+  .stat-pill b { font-variant-numeric: tabular-nums; color: var(--ink); }
+  .stat-pill .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .stat-pill.done .dot { background: var(--ok); }
+  .stat-pill.pend .dot { background: var(--accent); }
+
+  .ring { position: relative; width: 92px; height: 92px; flex-shrink: 0; }
+  .ring svg { width: 92px; height: 92px; transform: rotate(-90deg); }
+  .ring circle { fill: none; stroke-width: 9; stroke-linecap: round; }
+  .ring .ring-bg { stroke: var(--line); }
+  .ring .ring-fg { stroke: url(#grad); stroke-dasharray: 226.19; stroke-dashoffset: 226.19; }
+  .ring .ring-c {
+    position: absolute; inset: 0; display: grid; place-content: center; text-align: center; line-height: 1;
+  }
+  .ring .ring-c span { font-size: 1.15rem; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; }
+  .ring .ring-c small { font-size: .6rem; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); }
+
+  /* add form */
+  .add {
+    display: flex; gap: .5rem; margin-bottom: 1.3rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 15px; padding: .55rem; box-shadow: var(--sh); align-items: stretch;
+  }
+  .add .fields { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+  .add input { font: inherit; border: none; background: transparent; color: var(--ink); padding: .48rem .65rem; outline: none; }
+  .add input::placeholder { color: var(--faint); }
+  .add #titleInput { font-weight: 600; }
+  .add .fields input + input { border-top: 1px solid var(--line-2); font-size: .9rem; }
+  .add-meta { display: flex; gap: .4rem; padding: .4rem .35rem .15rem; border-top: 1px solid var(--line-2); margin-top: .1rem; }
+  .mini-select, .mini-date {
+    font: inherit; font-size: .8rem; color: var(--ink); background: var(--line-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: .3rem .55rem; outline: none;
+  }
+  .mini-select:focus, .mini-date:focus { border-color: var(--accent); }
+
+  .import-row {
+    display: flex; align-items: center; gap: .6rem; flex-wrap: wrap;
+    margin: -.7rem .3rem 1.3rem; font-size: .84rem; color: var(--muted);
+  }
+  .import-row label { cursor: pointer; }
+  .import-note { font-size: .8rem; color: var(--faint); }
+  /* Scanner-filed findings are marked, because "a tool saw this" and "a person
+     wrote this down" are different kinds of claim. */
+  .src {
+    font-size: .64rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .1rem .4rem; border-radius: 6px; flex-shrink: 0;
+    color: var(--muted); background: var(--line-2); border: 1px solid var(--line);
+  }
+
+  .finding .meta { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
+  /* The ramp tints the chip; the label is always spelled out and the text keeps
+     an ink token, so the level never rests on colour alone (and never has to
+     win a contrast fight against four different backgrounds). */
+  .sev { font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .1rem .45rem; border-radius: 6px; flex-shrink: 0; color: var(--ink); }
+  .sev-low { background: color-mix(in srgb, var(--sev-1) 20%, transparent); }
+  .sev-medium { background: color-mix(in srgb, var(--sev-2) 22%, transparent); }
+  .sev-high { background: color-mix(in srgb, var(--sev-3) 26%, transparent); }
+  .sev-critical { background: color-mix(in srgb, var(--sev-4) 30%, transparent); }
+  .asset {
+    display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted);
+    background: var(--line-2); border: 1px solid var(--line); border-radius: 6px; padding: .06rem .4rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; max-width: 100%; overflow: hidden;
+    text-overflow: ellipsis; white-space: nowrap;
+  }
+  /* Whose finding this is, in the sense that matters: who can see it and who
+     is expected to act. An unassigned team finding says so rather than looking
+     like nobody's problem by omission. */
+  .team-chip {
+    font-size: .72rem; font-weight: 700; color: var(--accent);
+    background: var(--accent-soft); border-radius: 999px; padding: .08rem .5rem; flex-shrink: 0;
+  }
+  .assignee { font-size: .74rem; color: var(--muted); }
+  .assignee.none { font-style: italic; opacity: .8; }
+
+  .due { display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .due svg { width: 12px; height: 12px; }
+  /* Reserved status colour: a missed remediation deadline, not a severity. */
+  .due.overdue { color: var(--danger); font-weight: 700; }
+
+  .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
+  .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
+  .filters { display: inline-flex; gap: .25rem; }
+  .chip {
+    font: inherit; font-size: .77rem; font-weight: 600; cursor: pointer; border: 1px solid var(--line);
+    background: var(--card); color: var(--muted); padding: .24rem .66rem; border-radius: 999px;
+  }
+  .chip:hover { color: var(--ink); }
+  .chip.active { background: var(--accent-soft); color: var(--accent); border-color: transparent; }
+
+  ul.findings { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .55rem; }
+  li.finding {
+    display: flex; align-items: center; gap: .85rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: .8rem .9rem;
+    box-shadow: var(--sh-sm); position: relative; overflow: hidden;
+  }
+  li.finding::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+    background: linear-gradient(var(--accent), var(--accent-2)); opacity: 0; transition: opacity .2s;
+  }
+  li.finding:hover { box-shadow: var(--sh); transform: translateY(-1px); border-color: color-mix(in srgb, var(--accent) 30%, var(--line)); }
+  li.finding:hover::before { opacity: 1; }
+  li.finding.closed::before { background: var(--ok); opacity: 1; }
+  /* Accepted risk is closed but not solved — it keeps the finding's colour,
+     so a list scan never reads it as "handled". */
+  li.finding.accepted::before { background: var(--sev-3); opacity: 1; }
+
+  /* The workflow state is a four-way choice, so it is a select, not a checkbox:
+     "fixed" and "accepted_risk" both close a finding and must stay tellable
+     apart. */
+  .state-select {
+    font: inherit; font-size: .78rem; font-weight: 700; color: var(--ink); background: var(--line-2);
+    border: 1px solid var(--line); border-radius: 9px; padding: .28rem .45rem; outline: none;
+    cursor: pointer; flex-shrink: 0; max-width: 8.5rem;
+  }
+  .state-select:focus-visible { border-color: var(--accent); outline: 2px solid var(--accent); outline-offset: 1px; }
+  /* Deliberately quieter than the state control: handing work to someone is a
+     smaller act than deciding a finding's outcome. */
+  .assign-select {
+    font: inherit; font-size: .74rem; color: var(--muted); background: transparent;
+    border: 1px solid var(--line); border-radius: 8px; padding: .2rem .35rem;
+    cursor: pointer; max-width: 7.5rem;
+  }
+  .assign-select:hover { color: var(--ink); border-color: var(--accent); }
+
+  /* --- Ekipler --- */
+  .team-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: .85rem .9rem; box-shadow: var(--sh-sm); margin-bottom: .6rem;
+  }
+  .team-head { display: flex; align-items: center; gap: .5rem; }
+  .team-head b { font-size: .98rem; }
+  .members { display: flex; flex-wrap: wrap; gap: .4rem; margin-top: .6rem; }
+  .member {
+    display: inline-flex; align-items: center; gap: .35rem; font-size: .78rem;
+    background: var(--line-2); border: 1px solid var(--line); border-radius: 999px;
+    padding: .16rem .3rem .16rem .6rem;
+  }
+  .member small { color: var(--muted); font-size: .68rem; }
+  /* The one role that can close a finding without solving it is marked. */
+  .member.owner { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); }
+  .member.owner small { color: var(--accent); font-weight: 700; }
+  .member .icon-btn { width: 20px; height: 20px; }
+  .member .icon-btn svg { width: 12px; height: 12px; }
+  .add-member { display: flex; gap: .4rem; margin-top: .7rem; flex-wrap: wrap; }
+  .add-member input {
+    flex: 1; min-width: 12rem; font: inherit; font-size: .82rem; padding: .35rem .6rem;
+    border: 1px solid var(--line); border-radius: 9px; background: var(--bg); color: var(--ink);
+  }
+  .add-member input:focus { outline: none; border-color: var(--accent); }
+  .body { flex: 1; min-width: 0; }
+  .title { font-weight: 600; word-break: break-word; }
+  li.finding.closed .title { text-decoration: line-through; color: var(--muted); }
+  li.finding.accepted .title { text-decoration: none; color: var(--ink); }
+  .desc { font-size: .84rem; color: var(--muted); word-break: break-word; margin-top: .12rem; }
+  .title-edit {
+    font: inherit; font-weight: 600; width: 100%; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--accent); border-radius: 8px; padding: .22rem .5rem; outline: none;
+  }
+
+  .actions { display: flex; gap: .1rem; align-items: center; flex-shrink: 0; }
+  .icon-btn {
+    background: transparent; border: none; cursor: pointer; color: var(--faint);
+    border-radius: 9px; padding: .4rem; display: grid; place-items: center;
+  }
+  .icon-btn:hover { color: var(--accent); background: var(--accent-soft); }
+  .icon-btn.del-x:hover { color: var(--danger); background: color-mix(in srgb, var(--danger) 13%, transparent); }
+  .icon-btn svg { width: 16px; height: 16px; }
+  .owner-badge {
+    font-size: .7rem; font-weight: 600; color: var(--muted); background: var(--line-2);
+    border: 1px solid var(--line); padding: .14rem .5rem; border-radius: 999px; flex-shrink: 0;
+  }
+
+  .empty { text-align: center; color: var(--muted); padding: 3rem 1rem; }
+  .empty .ico { width: 52px; height: 52px; margin: 0 auto .8rem; color: var(--faint); opacity: .8; }
+  .empty .ico svg { width: 100%; height: 100%; }
+
+  /* tabs + admin */
+  .tabs {
+    display: inline-flex; gap: .2rem; padding: .28rem; margin-bottom: 1.3rem;
+    background: var(--card); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--sh-sm);
+  }
+  .tab { font: inherit; font-weight: 600; font-size: .88rem; cursor: pointer; border: none;
+    background: transparent; color: var(--muted); padding: .42rem 1rem; border-radius: 9px; }
+  .tab:hover { color: var(--ink); }
+  /* Five tabs no longer fit a phone: scroll the row rather than clip the last one. */
+  @media (max-width: 620px) {
+    .tabs { display: flex; max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+    .tabs::-webkit-scrollbar { display: none; }
+    .tab { flex: 0 0 auto; padding-inline: .8rem; }
+  }
+  .tab.active { background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 6px 16px -8px var(--accent); }
+  .admin-block { margin-bottom: 1.9rem; }
+
+  /* dashboard */
+  .kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .75rem; margin-bottom: 1.6rem; }
+  @media (max-width: 620px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+  .kpi {
+    background: var(--card); border: 1px solid var(--line); border-radius: 16px;
+    padding: .85rem .95rem; box-shadow: var(--sh-sm);
+  }
+  .kpi .k-lbl {
+    display: block; font-size: .68rem; font-weight: 800; letter-spacing: .06em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .kpi .k-val {
+    display: block; font-size: 1.8rem; font-weight: 800; letter-spacing: -.045em;
+    line-height: 1.2; margin: .15rem 0 .1rem; font-variant-numeric: tabular-nums;
+  }
+  .kpi .k-sub { font-size: .78rem; color: var(--muted); }
+  /* Status colour, reserved: only ever means "needs attention", never a series. */
+  .kpi.alert { border-color: color-mix(in srgb, var(--danger) 35%, var(--line)); }
+  .kpi.alert .k-val { color: var(--danger); }
+
+  .chart { position: relative; }
+  .chart svg { display: block; width: 100%; height: auto; }
+  .chart .bar { fill: var(--accent); }
+  .chart .bar.danger { fill: var(--danger); }
+  .chart .hit { fill: transparent; }
+  .chart .hit:hover + .bar { filter: brightness(1.12); }
+  .chart .axis { stroke: var(--line); stroke-width: 1; }
+  .chart .tick { fill: var(--faint); font-size: 10px; font-family: inherit; }
+  .chart-tip {
+    position: absolute; left: 0; top: 0; pointer-events: none; opacity: 0;
+    transform: translate(-50%, calc(-100% - 8px));
+    background: var(--ink); color: var(--bg); font-size: .76rem; font-weight: 600;
+    padding: .3rem .55rem; border-radius: 8px; white-space: nowrap;
+    transition: opacity .12s; z-index: 5; box-shadow: var(--sh);
+  }
+  .chart-tip.show { opacity: 1; }
+
+  /* part-to-whole: 2px surface gaps separate the segments */
+  .stack { display: flex; gap: 2px; height: 30px; border-radius: 9px; overflow: hidden; background: var(--line-2); }
+  .stack > span {
+    display: grid; place-items: center; font-size: .74rem; font-weight: 800;
+    /* Not a fixed white: on dark the ramp runs light, so the label must flip too. */
+    color: var(--accent-ink); min-width: 2px; overflow: hidden;
+  }
+  .stack .s1 { background: var(--sev-1); }
+  .stack .s2 { background: var(--sev-2); }
+  .stack .s3 { background: var(--sev-3); }
+  .stack .s4 { background: var(--sev-4); }
+  .legend { display: flex; gap: 1.1rem; flex-wrap: wrap; margin-top: .75rem; font-size: .82rem; color: var(--muted); }
+  .legend i { width: 10px; height: 10px; border-radius: 3px; display: inline-block; margin-right: .4rem; vertical-align: -1px; }
+  .legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
+  .chart-note { margin: .7rem 0 0; font-size: .8rem; color: var(--faint); }
+  .badge { font-size: .72rem; font-weight: 700; color: var(--accent); background: var(--accent-soft); padding: .12rem .55rem; border-radius: 999px; }
+
+  ul.audit { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: .4rem; }
+  li.audit-row {
+    display: flex; align-items: center; gap: .7rem; background: var(--card);
+    border: 1px solid var(--line); border-radius: 11px; padding: .55rem .8rem; font-size: .88rem; box-shadow: var(--sh-sm);
+  }
+  .act { font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .16rem .5rem; border-radius: 7px; flex-shrink: 0; }
+  .act.created { color: var(--ok); background: var(--ok-soft); }
+  .act.updated { color: var(--warn); background: var(--accent-soft); }
+  .act.deleted { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  .act.imported, .act.monitored, .act.expired { color: var(--accent); background: var(--accent-soft); }
+  .act.access_denied { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  .audit-row { min-width: 0; }
+  .audit-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .audit-row .when { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
+
+  /* login */
+  .login {
+    /* minmax(0,…) not 1fr: a bare 1fr track cannot shrink below its content's
+       min-content width, which pushes the layout wider than a narrow screen. */
+    display: grid; grid-template-columns: minmax(0, 1fr) min(384px, 100%);
+    gap: 3.2rem; align-items: center; padding: 2.4rem 0 1rem;
+    min-height: calc(100vh - 12rem);
+  }
+  /* min() rather than a flat rem: on a narrow screen a fixed rem width is wider
+     than the viewport and the text overflows off the right edge. */
+  .pitch { max-width: min(31rem, 100%); }
+  .pitch h1 {
+    margin: 0 0 .85rem; font-size: clamp(1.95rem, 4.2vw, 2.7rem);
+    line-height: 1.1; letter-spacing: -.045em;
+  }
+  .pitch h1 em {
+    font-style: normal;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    -webkit-background-clip: text; background-clip: text; -webkit-text-fill-color: transparent;
+  }
+  .pitch .lede { color: var(--muted); font-size: 1.02rem; margin: 0 0 1.9rem; max-width: 27rem; }
+  .feats { list-style: none; margin: 0; padding: 0; display: grid; gap: 1rem; }
+  .feats li { display: flex; gap: .8rem; align-items: flex-start; }
+  /* Same reason: a flex item's automatic minimum is its min-content width. */
+  .feats li > div { min-width: 0; }
+  .feats .ic {
+    flex-shrink: 0; width: 32px; height: 32px; border-radius: 10px; display: grid; place-items: center;
+    background: var(--accent-soft); color: var(--accent);
+  }
+  .feats .ic svg { width: 16px; height: 16px; }
+  .feats b { display: block; font-size: .93rem; letter-spacing: -.01em; }
+  .feats span { color: var(--muted); font-size: .85rem; }
+
+  @media (max-width: 900px) {
+    .login {
+      grid-template-columns: minmax(0, 1fr); gap: 2.2rem; justify-items: center;
+      padding-top: 1rem; min-height: 0;
+    }
+    /* Stacked, the sign-in card leads: people come here to log in, not to read. */
+    .login-card { order: -1; max-width: 384px; }
+    .pitch { text-align: center; }
+    .pitch .lede { margin-inline: auto; }
+    .feats { text-align: left; max-width: min(25rem, 100%); margin-inline: auto; }
+  }
+
+  .login-card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 24px;
+    padding: 2.6rem 2.1rem 2.1rem; text-align: center; width: 100%; box-shadow: var(--sh-lg); position: relative; overflow: hidden;
+  }
+  .login-card::after {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 4px;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  }
+  .login-card .lock {
+    width: 64px; height: 64px; border-radius: 19px; margin: 0 auto 1.3rem; display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); color: #fff; box-shadow: 0 12px 30px -10px var(--accent);
+  }
+  .login-card .lock svg { width: 30px; height: 30px; }
+  .login-card h2 { margin: 0 0 .45rem; font-size: 1.4rem; letter-spacing: -.03em; }
+  .login-card p { color: var(--muted); margin: 0 0 1.6rem; font-size: .93rem; }
+  .login-card .btn { width: 100%; padding: .82rem; font-size: 1rem; }
+  .login-card .fine {
+    display: flex; align-items: center; justify-content: center; gap: .38rem;
+    margin: 1.05rem 0 0; font-size: .78rem; color: var(--faint);
+  }
+  .login-card .fine svg { width: 13px; height: 13px; flex-shrink: 0; }
+
+  /* Risk kabul diyaloğu. Bir riski kabul etmek, arayüzde de tek tıkla
+     olmamalı: gerekçe ve bitiş tarihi karşına çıkar. */
+  .modal-backdrop {
+    position: fixed; inset: 0; background: color-mix(in srgb, #000 45%, transparent);
+    display: grid; place-items: center; padding: 1rem; z-index: 60;
+  }
+  .modal {
+    background: var(--card); border: 1px solid var(--line); border-radius: 18px;
+    box-shadow: var(--sh-lg); padding: 1.4rem; width: min(30rem, 100%);
+  }
+  .modal h3 { margin: 0 0 .3rem; font-size: 1.05rem; letter-spacing: -.02em; }
+  .modal .why { color: var(--muted); font-size: .86rem; margin: 0 0 1.1rem; }
+  .modal label { display: block; font-size: .78rem; font-weight: 700; color: var(--muted); margin-bottom: .3rem; }
+  .modal textarea, .modal input[type=date] {
+    font: inherit; width: 100%; color: var(--ink); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 10px; padding: .55rem .65rem; outline: none;
+  }
+  .modal textarea { min-height: 5.5rem; resize: vertical; }
+  .modal textarea:focus, .modal input[type=date]:focus { border-color: var(--accent); }
+  .modal .field { margin-bottom: 1rem; }
+  .modal .hint { font-size: .76rem; color: var(--faint); margin: .3rem 0 0; }
+  .modal .err { font-size: .8rem; color: var(--danger); margin: 0 0 .8rem; min-height: 1.1em; }
+  .modal .row { display: flex; gap: .5rem; justify-content: flex-end; }
+
+  /* Kabul edilmiş bir bulgunun taşıdığı karar, satırda görünür durur. */
+  .accepted-note {
+    margin-top: .4rem; font-size: .8rem; color: var(--muted);
+    border-left: 2px solid var(--sev-3); padding-left: .55rem;
+  }
+  .accepted-note b { color: var(--ink); font-weight: 600; }
+
+  .chain { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; font-size: .86rem; }
+  .chain .ok { color: var(--ok); font-weight: 700; }
+  .chain .bad { color: var(--danger); font-weight: 700; }
+
+  .toast {
+    position: fixed; bottom: 1.4rem; left: 50%; transform: translateX(-50%) translateY(10px);
+    background: var(--ink); color: var(--bg); padding: .65rem 1.15rem; border-radius: 11px;
+    font-size: .88rem; font-weight: 600; opacity: 0; transition: all .24s; pointer-events: none; box-shadow: var(--sh-lg); z-index: 50;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .hidden { display: none !important; }
+
+  @media (max-width: 480px) {
+    .summary { flex-direction: row-reverse; gap: .8rem; padding: 1.1rem; }
+    .summary .hello { font-size: 1.15rem; }
+    .ring, .ring svg { width: 76px; height: 76px; }
+    .who .name { display: none; }
+  }
+
+  /* security & account */
+  .sec-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-bottom: 1rem; }
+  .sec-id { display: flex; align-items: center; gap: 1rem; padding: .3rem 0; }
+  .sec-av {
+    width: 56px; height: 56px; border-radius: 16px; flex: none; display: grid; place-items: center;
+    font-size: 1.4rem; font-weight: 800; color: #fff;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2)); box-shadow: 0 10px 24px -10px var(--accent);
+  }
+  .sec-name { font-weight: 700; font-size: 1.1rem; letter-spacing: -.02em; }
+  .sec-mail { color: var(--muted); font-size: .88rem; margin: .12rem 0 .5rem; }
+  .sec-roles { display: flex; gap: .35rem; flex-wrap: wrap; }
+  .sec-kv { margin: 0; display: grid; grid-template-columns: auto 1fr; gap: .55rem 1rem; align-items: baseline; }
+  .sec-kv dt { color: var(--muted); font-size: .85rem; }
+  .sec-kv dd { margin: 0; font-size: .85rem; font-weight: 600; word-break: break-all; text-align: right; }
+  .sec-checks { list-style: none; margin: 0; padding: 0; display: grid; gap: .55rem; }
+  .sec-checks li { display: flex; align-items: center; gap: .6rem; font-size: .9rem; }
+  .sec-checks .ck {
+    flex: none; width: 22px; height: 22px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--ok-soft); color: var(--ok); font-weight: 800; font-size: .78rem;
+  }
+  @media (max-width: 620px) { .sec-grid { grid-template-columns: 1fr; } }
+
+  /* Yalnızca gradyan tanımını taşıyan SVG; akışta yer kaplamamalı. Satır içi
+     style yerine sınıf, çünkü CSP artık style-src 'unsafe-inline' kabul etmiyor. */
+  .defs { position: absolute; }
