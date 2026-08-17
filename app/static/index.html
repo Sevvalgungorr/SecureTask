@@ -109,10 +109,29 @@
     color: var(--accent); background: var(--accent-soft); padding: .14rem .4rem; border-radius: 5px;
   }
 
-  /* The signed-in app stays a single readable column; the landing page needs the
-     full width for its two-column layout, so the limit lives on the view. */
-  main { max-width: 1080px; margin: 0 auto; padding: 1.6rem 1.15rem 5rem; }
-  #appView { max-width: 640px; margin: 0 auto; }
+  main { max-width: 1240px; margin: 0 auto; padding: 1.6rem 1.15rem 5rem; }
+  /* Bir yapılacaklar listesi tek dar sütunda iyi okunur; grafikleri, ekipleri ve
+     denetim günlüğü olan bir pano okunmaz — genişlik ister. Sınır kalktı; dar
+     kalması gereken tek şey (bulgu ekleme formu) kendi sınırını taşıyor. */
+  #appView { margin: 0 auto; }
+
+  /* Pano: iki grafiği yan yana koyacak kadar yer varsa koy. */
+  /* minmax(0,…) şart: çıplak bir 1fr, içeriğinin min-content genişliğinin
+     altına inemez — grafikler ezilir, metin sütunu her şeyi iter. */
+  .dash-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
+               gap: 1.4rem; margin-bottom: 1.9rem; align-items: start; }
+  .dash-grid > .admin-block { margin-bottom: 0; }
+  @media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 1.1rem; } }
+
+  /* Geniş ekranda bir bulgu satırı: başlık solda, ölçüler sağda hizalı. Kart
+     yığını yerine tabloya yakın bir okuma — envanter böyle taranır. */
+  @media (min-width: 900px) {
+    li.finding .meta { margin-top: 0; flex-shrink: 0; justify-content: flex-end; }
+    li.finding > .body { display: flex; align-items: center; gap: .9rem; }
+    li.finding .body > .title-wrap { flex: 1; min-width: 0; }
+    .add { max-width: 760px; }
+    .import-row { max-width: 760px; }
+  }
 
   .btn {
     font: inherit; font-weight: 600; cursor: pointer; border: none; border-radius: 11px;
@@ -400,6 +419,7 @@
   .act.deleted { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .act.imported, .act.monitored, .act.expired { color: var(--accent); background: var(--accent-soft); }
   .act.access_denied { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  .audit-row { min-width: 0; }
   .audit-row .what { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .audit-row .when { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; flex-shrink: 0; }
 
@@ -639,6 +659,7 @@
         </div>
       </div>
 
+      <div class="dash-grid">
       <div class="admin-block">
         <div class="list-head"><h2>Aktivite</h2><span class="badge">son 14 gün</span></div>
         <div class="chart" id="actChart"></div>
@@ -651,6 +672,12 @@
         <div class="legend" id="sevLegend"></div>
       </div>
 
+      <div class="admin-block">
+        <div class="list-head"><h2>Son işlemler</h2><span class="badge">son 8</span></div>
+        <ul class="audit" id="recentAudit"></ul>
+        <p class="chart-note">Tamamı <b>Geçmişim</b> sekmesinde.</p>
+      </div>
+
       <div class="admin-block hidden" id="denyBlock">
         <div class="list-head"><h2>Reddedilen erişimler</h2><span class="badge">son 14 gün</span></div>
         <div class="chart" id="denyChart"></div>
@@ -658,6 +685,7 @@
           401/403 dönen istekler denetim günlüğüne <code>access_denied</code> olarak yazılır.
           Yalnızca yöneticiler görebilir.
         </p>
+      </div>
       </div>
     </div>
 
@@ -1129,14 +1157,17 @@ function findingRow(f) {
 
   const body = document.createElement("div");
   body.className = "body";
+  const wrap = document.createElement("div");
+  wrap.className = "title-wrap";
   const title = document.createElement("div");
   title.className = "title"; title.textContent = f.title;
-  body.appendChild(title);
+  wrap.appendChild(title);
   if (f.description) {
     const d = document.createElement("div");
     d.className = "desc"; d.textContent = f.description;
-    body.appendChild(d);
+    wrap.appendChild(d);
   }
+  body.appendChild(wrap);
   body.appendChild(findingMeta(f));
   if (f.status === "accepted_risk" && f.accepted_reason) {
     const note = document.createElement("div");
@@ -1582,14 +1613,17 @@ function adminFindingRow(f) {
 
   const body = document.createElement("div");
   body.className = "body";
+  const wrap = document.createElement("div");
+  wrap.className = "title-wrap";
   const title = document.createElement("div");
   title.className = "title"; title.textContent = f.title;
-  body.appendChild(title);
+  wrap.appendChild(title);
   if (f.description) {
     const d = document.createElement("div");
     d.className = "desc"; d.textContent = f.description;
-    body.appendChild(d);
+    wrap.appendChild(d);
   }
+  body.appendChild(wrap);
   body.appendChild(findingMeta(f));
 
   const owner = document.createElement("span");
@@ -1815,6 +1849,12 @@ async function loadDash() {
   columnChart(document.getElementById("actChart"), points, {
     aria: "Son 14 günün günlük işlem sayısı",
   });
+
+  // Panodaki son işlemler, geçmiş sekmesindeki listenin kısaltılmışı — aynı
+  // satır bileşeni kullanılıyor ki iki yerde iki farklı görünüm oluşmasın.
+  const recent = document.getElementById("recentAudit");
+  recent.innerHTML = "";
+  log.slice(0, 8).forEach(a => recent.appendChild(auditRow(a)));
 
   const week = points.slice(-7).reduce((s, p) => s + p.value, 0);
   document.getElementById("kWeek").textContent = week;
