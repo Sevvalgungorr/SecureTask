@@ -173,8 +173,13 @@
   /* add form */
   .add {
     display: flex; gap: .5rem; margin-bottom: 1.3rem; background: var(--card);
-    border: 1px solid var(--line); border-radius: 15px; padding: .55rem; box-shadow: var(--sh); align-items: stretch;
+    border: 1px solid var(--line); border-radius: 15px; padding: .55rem;
+    box-shadow: var(--sh);
+    /* Alta hizalı: form üç satıra çıkınca gerilmiş bir düğme, kartın yanında
+       duran mor bir levhaya dönüşüyordu. */
+    align-items: flex-end;
   }
+  .add > .btn { min-width: 6.5rem; }
   .add .fields { display: flex; flex-direction: column; flex: 1; min-width: 0; }
   .add input { font: inherit; border: none; background: transparent; color: var(--ink); padding: .48rem .65rem; outline: none; }
   .add input::placeholder { color: var(--faint); }
