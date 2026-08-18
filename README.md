@@ -104,6 +104,37 @@ Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmı�
 kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
 denetim günlüğüne bir özet satırı bırakır.
 
+#### Bulgunun altındaki kod
+
+"`app/reports.py` · satır 24" bir referanstır: değerlendirmek için depoyu açıp
+dosyayı bulmak ve 24. satıra kadar saymak gerekir. Kimse bunu her bulgu için
+yapmaz, o yüzden liste kural adına bakılarak triyaj edilir — kural adı da
+bulgunun en az güvenilir parçasıdır. Bulgunun altında kodun kendisi durursa
+karar, kararın verildiği yerde verilebilir.
+
+```
+▾ kod — app/reports.py:24
+    23 |
+  > 24 |     return db.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
+    25 |
+```
+
+Satırlar raporun kendisinden gelir: SARIF `region.snippet` taşır, çoğu zaman
+etrafında daha geniş bir `contextRegion.snippet` ile birlikte. **Hiçbir şey
+indirilmez** — depo klonlanmaz ve rapordaki hiçbir yol açılmaz. Rapor birinin
+yüklediği bir dosyadır; içindeki yolları gidip okuyan bir ayrıştırıcı,
+sunucunun diskine doğrultulmuş bir dosya-okuma ilkeli olurdu.
+
+Parça alıntılanmış kaynak koddur, yani kuralın işaretlediği şeyin ta kendisini
+içerebilir — bir hardcoded-secret bulgusu sırrı alıntılar. Bu yüzden bulgunun
+üstünde durur ve bulgunun erişim denetimini miras alır, 4000 karakterle
+sınırlıdır ve arayüzde `textContent` ile basılır: `innerHTML` olsaydı özel
+hazırlanmış bir rapor bu uygulamaya script sokabilirdi.
+
+Yeniden içe aktarmada parça tazelenir, kritiklik tazelenmez. Kod taşınır, yani
+en yeni rapor daha doğru satırları taşır; kritiklik ise birinin elle vermiş
+olabileceği bir yargıdır ve yerinde kalır.
+
 ### İzleme
 
 ```bash
@@ -243,6 +274,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🔑 **Step-up MFA** — bir riski kabul etmek ikinci faktör ister; parola tek başına yetmez
 - 📝 **Risk kabul kütüğü** — gerekçe ve bitiş tarihi zorunlu (en fazla 90 gün); süre dolunca bulgu kendiliğinden yeniden açılır
 - 📥 **Tarama raporu içe aktarma** — web için nuclei (JSON/JSONL), kod için **SARIF** (Semgrep, Bandit, CodeQL, gitleaks); yeniden taramada tekilleştirir, kapatılmış ama hâlâ görülen bulguyu yeniden açar
+- 🔎 **Bulgunun altında kodun kendisi** — SARIF raporunun taşıdığı satırlar, kuralın düştüğü satır işaretli; depoyu açmadan karar verilir (kod indirilmez, rapordaki hiçbir yol açılmaz)
 - 📡 **İzleme** — kayıtlı varlıklarda TLS sertifikası süresi, erişilebilirlik ve güvenlik başlıkları; bozulan kontrol bulgu açar, düzelen kontrol kendi bulgusunu kapatır
 - 👤 **Kapsamlı erişim** — herkes kendi bulgularını ve ekiplerinin bulgularını görür, başkasınınkini değil
 - 🛡️ **Rol bazlı yetki (RBAC)** — yöneticiye özel uçlar

@@ -858,6 +858,9 @@ def _ingest(
                 source=tool,
                 source_ref=result.source_ref,
                 source_severity=result.severity,
+                evidence=result.evidence or None,
+                evidence_start=result.evidence_start,
+                evidence_line=result.evidence_line,
                 owner_id=user.id,
                 team_id=team_id,
             )
@@ -874,6 +877,14 @@ def _ingest(
         elif existing.status == ACCEPTED_RISK:
             kept_accepted += 1
         else:
+            # The code moves; the snippet from the newest report is the one
+            # worth showing. Severity is a judgement and stays put, but the
+            # quoted lines are just the current evidence.
+            if result.evidence:
+                existing.evidence = result.evidence
+                existing.evidence_start = result.evidence_start
+                existing.evidence_line = result.evidence_line
+
             escalated_from = _escalate_from_source(existing, result.severity)
 
             if existing.status == "fixed":

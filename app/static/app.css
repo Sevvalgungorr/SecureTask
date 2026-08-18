@@ -120,8 +120,11 @@
      yığını yerine tabloya yakın bir okuma — envanter böyle taranır. */
   @media (min-width: 900px) {
     li.finding .meta { margin-top: 0; flex-shrink: 0; justify-content: flex-end; }
-    li.finding > .body { display: flex; align-items: center; gap: .9rem; }
+    li.finding > .body { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap; }
     li.finding .body > .title-wrap { flex: 1; min-width: 0; }
+    /* Kanıt bloğu kendi satırını alır. Kardeş olarak kalsaydı esnek kutu onu
+       en dar hâline sıkıştırır, kod harf harf sarılırdı. */
+    li.finding .body > .evidence { flex-basis: 100%; min-width: 0; }
     .add { max-width: 760px; }
     .import-row { max-width: 760px; }
   }
@@ -540,6 +543,31 @@
   .modal .row { display: flex; gap: .5rem; justify-content: flex-end; }
 
   /* Kabul edilmiş bir bulgunun taşıdığı karar, satırda görünür durur. */
+  /* Kod kanıtı: raporun getirdiği satırlar. Katlanır, çünkü liste taranırken
+     her satırda bir kod bloğu istenmez; açıldığında hatalı satır işaretli. */
+  .evidence { margin-top: .45rem; min-width: 0; }
+  .evidence > summary {
+    cursor: pointer; font-size: .78rem; color: var(--accent); font-weight: 600;
+    list-style: none; display: inline-flex; align-items: center; gap: .3rem;
+  }
+  .evidence > summary::-webkit-details-marker { display: none; }
+  .evidence > summary::before { content: "▸"; font-size: .7rem; }
+  .evidence[open] > summary::before { content: "▾"; }
+  .code {
+    margin: .4rem 0 0; border: 1px solid var(--line); border-radius: 9px;
+    background: var(--line-2); overflow-x: auto;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .76rem;
+  }
+  .code .ln { display: flex; gap: .7rem; padding: .1rem .6rem; white-space: pre; }
+  .code .ln .n {
+    color: var(--faint); text-align: right; min-width: 2.4rem; flex: none;
+    font-variant-numeric: tabular-nums; user-select: none;
+  }
+  /* İşaretlenen satır: kuralın tetiklendiği yer. --danger burada da ayrılmış
+     anlamını koruyor — "dikkat gerekiyor". */
+  .code .ln.hit { background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .code .ln.hit .n { color: var(--danger); font-weight: 700; }
+
   .accepted-note {
     margin-top: .4rem; font-size: .8rem; color: var(--muted);
     border-left: 2px solid var(--sev-3); padding-left: .55rem;

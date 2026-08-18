@@ -201,6 +201,43 @@ function askAcceptance(f) {
   });
 }
 
+// Raporun getirdiği kod parçası. Kod bizde durmuyor — depo hiç klonlanmıyor —
+// bu satırlar taramanın kendi raporundan geliyor.
+function evidenceBlock(f) {
+  if (!f.evidence) return null;
+
+  const lines = f.evidence.replace(/\n$/, "").split("\n");
+  const start = f.evidence_start || f.evidence_line || 1;
+
+  const box = document.createElement("details");
+  box.className = "evidence";
+  const summary = document.createElement("summary");
+  summary.textContent = f.evidence_line
+    ? `kod — ${f.asset}:${f.evidence_line}`
+    : `kod — ${f.asset}`;
+  box.appendChild(summary);
+
+  const pre = document.createElement("div");
+  pre.className = "code";
+  lines.forEach((text, i) => {
+    const no = start + i;
+    const row = document.createElement("div");
+    row.className = "ln" + (no === f.evidence_line ? " hit" : "");
+    const n = document.createElement("span");
+    n.className = "n";
+    n.textContent = no;
+    const t = document.createElement("span");
+    // textContent: bu, birinin deposundan gelen metin. innerHTML olsaydı bir
+    // tarama raporu bu uygulamaya script sokabilirdi.
+    t.textContent = text;
+    row.append(n, t);
+    pre.appendChild(row);
+  });
+  box.appendChild(pre);
+
+  return box;
+}
+
 // The row's own status control. Changing it PUTs the finding, so the change
 // lands in the audit log the same way any other edit does.
 function stateSelect(f, after) {
@@ -307,6 +344,8 @@ function findingRow(f) {
   }
   body.appendChild(wrap);
   body.appendChild(findingMeta(f));
+  const code = evidenceBlock(f);
+  if (code) body.appendChild(code);
   if (f.status === "accepted_risk" && f.accepted_reason) {
     const note = document.createElement("div");
     note.className = "accepted-note";
