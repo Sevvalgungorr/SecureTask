@@ -5,7 +5,6 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException, Request
-from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import or_, text
@@ -72,7 +71,7 @@ app.mount("/static", StaticFiles(directory=_STATIC), name="static")
 
 
 @app.get("/docs", include_in_schema=False)
-def swagger_ui():
+def swagger_ui(request: Request):
     """The API docs, served without reaching off this host.
 
     Vendoring the assets rather than allowing the CDN in the CSP keeps the
@@ -82,14 +81,35 @@ def swagger_ui():
     work on a machine with no internet access, which is where an internal tool
     usually lives.
     """
-    return get_swagger_ui_html(
-        openapi_url=app.openapi_url,
-        title=f"{app.title} — API",
-        swagger_js_url="/static/vendor/swagger-ui-bundle.js",
-        swagger_css_url="/static/vendor/swagger-ui.css",
-        # Default points at fastapi.tiangolo.com, which img-src 'self' blocks.
-        swagger_favicon_url="/static/vendor/favicon.svg",
-    )
+    # Written out here rather than through get_swagger_ui_html, which emits an
+    # inline <script> with no way to put a nonce on it. Under a policy without
+    # 'unsafe-inline' that script is blocked and the page renders blank — which
+    # is exactly what happened, and what the earlier test missed by checking
+    # that the page was *returned* rather than that it *worked*.
+    nonce = request.state.csp_nonce
+
+    return HTMLResponse(f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>{app.title} — API</title>
+<link rel="stylesheet" href="/static/vendor/swagger-ui.css">
+<link rel="icon" href="/static/vendor/favicon.svg">
+</head>
+<body>
+<div id="swagger-ui"></div>
+<script src="/static/vendor/swagger-ui-bundle.js"></script>
+<script nonce="{nonce}">
+SwaggerUIBundle({{
+  url: "{app.openapi_url}",
+  dom_id: "#swagger-ui",
+  presets: [SwaggerUIBundle.presets.apis],
+  layout: "BaseLayout",
+  deepLinking: true,
+}});
+</script>
+</body>
+</html>""")
 
 
 # Holds the PKCE code_verifier between /auth/login and /callback, and ties the
