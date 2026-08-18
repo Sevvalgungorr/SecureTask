@@ -73,6 +73,7 @@
     <div class="tabs hidden" id="tabs">
       <button class="tab active" data-view="dash" type="button">Pano</button>
       <button class="tab" data-view="my" type="button">Bulgularım</button>
+      <button class="tab" data-view="risk" type="button">Risk</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
@@ -229,6 +230,37 @@
       <div class="empty hidden" id="emptyState">
         <div class="ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
         Henüz kayıtlı bulgun yok.<br>Yukarıdan ilk bulguyu ekle.
+      </div>
+    </div>
+
+    <!-- Risk matrisi kendi sayfasında: hücreye tıklamak o bulguları hemen
+         altında açıyor. Panoda dursaydı tıklama okuyucuyu başka bir sekmeye
+         atardı ve matrisin bütün amacı — "şuraya bak" deyip oraya götürmek —
+         kaybolurdu. -->
+    <div id="riskView" class="hidden">
+      <div class="admin-block">
+        <div class="list-head">
+          <h2>Risk matrisi</h2>
+          <span class="badge">açık bulgular</span>
+        </div>
+        <p class="chart-note matrix-lead">
+          Satırlar <b>ne kadar kötü</b>, sütunlar <b>ne kadar süredir taşıdığımız</b>.
+          Sağ üste doğru gidildikçe ikisi birden kötüleşir. Bir hücreye tıkla,
+          içindeki bulgular aşağıda açılsın.
+        </p>
+        <div class="matrix-wrap">
+          <table class="matrix" id="riskMatrix"></table>
+        </div>
+        <div class="matrix-legend" id="matrixLegend"></div>
+      </div>
+
+      <div class="admin-block">
+        <div class="list-head">
+          <h2 id="riskListTitle">Seçilen hücre</h2>
+          <button class="btn ghost sm hidden" id="riskClear" type="button">Seçimi temizle</button>
+        </div>
+        <ul class="findings" id="riskList"></ul>
+        <p class="chart-note" id="riskNote"></p>
       </div>
     </div>
 

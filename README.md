@@ -258,6 +258,39 @@ Sıra önemli: `fixed → accepted_risk` yeniden damgalamaz. Kapatma **sebebi**
 değişmiştir, kapalı olduğu değil — bulgu listeye hiç geri dönmedi. Yeniden
 damgalasaydı geç kapatılmış bir bulgu sessizce süresinde kapatılmış görünürdü.
 
+### Risk matrisi: neye önce bakılacağı
+
+Bir bulgunun iki bağımsız niteliği var: **ne kadar kötü** ve **ne kadar süredir
+taşıdığımız**. Düz bir listede ikincisi görünmez — doksan gündür açık duran bir
+"orta", dün gelmiş bir "yüksek"in altında kalır ve kimse ikisini karşılaştırmaz.
+Izgara tam da bu karşılaştırmayı yapmak için var.
+
+![Risk matrisi](docs/images/risk-matrix.png)
+
+Kendi sekmesinde duruyor, panoda değil: bir hücreye tıklamanın anlamı "bunları
+bana göster" ve cevabın hemen altında açılması gerekiyor. Panoda olsaydı tıklama
+okuyucuyu başka bir sekmeye atardı, matrisin bütün amacı da orada kaybolurdu.
+
+Hücrenin rengi **içindeki bulgu sayısından değil, hücrenin kendi yerinden** gelir
+— bir risk matrisi sabit bir sınıflandırmadır, veri onu doldurur. Yoğunluğa göre
+boyansaydı, tek bir kritik-ve-eski bulgu taşıyan hücre soluk kalır, otuz tane
+yeni "düşük" taşıyan hücre kıpkırmızı yanardı; yani ızgara tam da göstermesi
+gereken şeyin tersini gösterirdi.
+
+Bandın adı bilerek kritikliğin adı değil (`izle` / `sıraya al` / `öncelikli` /
+`acil`). Satırlar zaten "Kritik / Yüksek / Orta / Düşük" diyor; efsane de aynı
+kelimeleri kullansaydı ikisi aynı şey sanılırdı. Band, kritiklik ile yaşın
+birleşimi — yani sıraya koyma kararı — ve yapılacak işin diliyle yazılıyor.
+Kritiklik iki kat sayılır: doksan günlük bir "düşük", bir günlük bir "kritik"
+kadar acil değildir. Yaş kritikliğin yerine geçmez, onu ağırlaştırır.
+
+Yalnızca **açık** bulgular sayılır. Kapanmış bir bulgu yaşlanmaz; onu saymak
+taşınan riski olduğundan büyük gösterirdi. Boş hücreler solar ama yerinde kalır:
+ızgaranın şekli veriye göre değişmez, ve "burada hiç yok" da bir cevaptır.
+
+Yaş `created_at`'ten geliyor — [SLA saati](#sla-saati-pencerenin-iki-ucu) o kolonu
+eklediği için elimizde.
+
 ### Risk kabulü: gerekçe, sahip ve bitiş
 
 Bir riski kabul etmek bulguyu kapatır — ama "düzeltildi" ile aynı şey değildir:
@@ -312,6 +345,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🔎 **Bulgu kaydı** — başlık, kanıt, **varlık**, kritiklik, durum
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - ⏱️ **SLA zaman çubuğu** — her bulgunun altında penceresinin ne kadarının harcandığı; kapananlarda süresinde mi geç mi kapandığı, kabul edilen riskte geri sayım
+- 🎛️ **Risk matrisi** — kritiklik × yaş ızgarası kendi sekmesinde; hücreye tıklayınca içindeki bulgular hemen altında açılır
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 👥 **Ekip ve atama** — bulgu bir ekibe ait olur, ekipteki herkes görür, biri üstlenir; kimin ilgilendiği listede yazar
 - ⚖️ **Görev ayrılığı** — riski yalnızca ekibin risk sahibi kabul edebilir ve o kişi bulguyu bildiren olamaz

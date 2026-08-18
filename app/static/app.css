@@ -299,6 +299,47 @@
   .b-later { --b-c: color-mix(in srgb, var(--accent) 45%, transparent); }
   .b-over .b-lbl, .b-over .b-n { color: var(--danger); font-weight: 700; }
 
+  /* --- Risk matrisi -------------------------------------------------------
+     Bandın rengi hücrenin kendi yerinden gelir, içindeki sayıdan değil: bir
+     risk matrisi sabit bir sınıflandırmadır, veri onu doldurur. Kritiklik
+     rampasını kullanıyor, çünkü söylediği şey tam olarak kritiklik. */
+  .matrix-lead { margin: 0 .25rem .9rem; }
+  /* Dar ekranda ızgara kendi içinde kayar; sayfanın yatay kayması hiçbir
+     zaman kabul edilebilir değil. */
+  .matrix-wrap { overflow-x: auto; }
+  /* Genişlik sınırlı: hücrede iki haneli bir sayı var, sayfanın tamamı kadar
+     yer kaplaması onu okunur yapmıyor, ızgarayı ızgara olmaktan çıkarıyor. */
+  .matrix { border-collapse: separate; border-spacing: .4rem; width: 100%; max-width: 720px; min-width: 460px; }
+  .matrix th {
+    font-size: .74rem; font-weight: 700; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .06em; padding: .2rem .4rem;
+  }
+  .matrix th[scope="row"] { text-align: right; white-space: nowrap; }
+  .matrix td.cell { padding: 0; }
+  .cell-btn {
+    font: inherit; font-weight: 800; font-size: 1.05rem; cursor: pointer;
+    width: 100%; min-height: 54px; border: 1px solid transparent; border-radius: 12px;
+    color: #fff; background: var(--band); font-variant-numeric: tabular-nums;
+    transition: transform .15s ease, box-shadow .15s ease, opacity .15s ease;
+  }
+  .cell-btn:hover:not(:disabled) { transform: translateY(-2px); box-shadow: var(--sh); }
+  .cell-btn:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
+  /* Seçili hücre: renk zaten bandı anlatıyor, seçimi çerçeve söylüyor —
+     bir bandı koyultmak onu başka bir band gibi gösterirdi. */
+  .cell-btn.picked { border-color: var(--ink); box-shadow: var(--sh); }
+  /* Boş hücre solar ama yerinde kalır: ızgaranın şekli veriye göre değişmez,
+     ve "burada hiç yok" da bir cevaptır. Sınıf adı "blank" — "empty" bu
+     sayfada zaten boş durum kutusunun sınıfı ve 3rem dolgusu var. */
+  .cell-btn.blank { background: var(--line-2); color: var(--faint); cursor: default; font-weight: 600; }
+  .band-0 { --band: var(--sev-1); }
+  .band-1 { --band: var(--sev-2); }
+  .band-2 { --band: var(--sev-3); }
+  .band-3 { --band: var(--sev-4); }
+  .matrix-legend { display: flex; gap: .9rem; flex-wrap: wrap; margin: .9rem .25rem 0; font-size: .76rem; color: var(--muted); }
+  .matrix-legend span { display: inline-flex; align-items: center; gap: .35rem; }
+  .matrix-legend .legend-lead { color: var(--faint); font-weight: 700; }
+  .matrix-legend i { width: 11px; height: 11px; border-radius: 3px; background: var(--band); }
+
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
   .filters { display: inline-flex; gap: .25rem; }
