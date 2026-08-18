@@ -568,6 +568,10 @@ async function loadFindings() {
   setStats(myFindings);
   refreshSourceOptions();
   renderMyList();
+  // Risk sayfası da aynı veriden besleniyor. Açıkken tazelemezse, oradan
+  // yapılan bir kritiklik değişikliği bulguyu artık ait olmadığı hücrede
+  // bırakırdı — ızgara veriyle çelişirdi.
+  if (!document.getElementById("riskView").classList.contains("hidden")) renderRisk();
 }
 
 function setupFilters() {
@@ -1306,7 +1310,181 @@ async function loadSecurity() {
   });
 }
 
-const VIEWS = { dash: "dashView", my: "myView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- Risk matrisi ----------------------------------------------------------
+//
+// Kritiklik bir bulgunun ne kadar kötü olduğunu söyler; yaş, onunla ne kadar
+// süredir yaşadığımızı. İkisi ayrı sorular ve tek bir listede yan yana
+// durduklarında görünmezler: doksan gündür açık duran bir "orta", dün gelmiş
+// bir "yüksek"in altında kalır ve kimse ikisini karşılaştırmaz. Izgara tam da
+// bu karşılaştırmayı yapmak için var.
+//
+// Yaş `created_at`'ten geliyor — SLA saati eklendiği için elimizde.
+
+const AGE_BUCKETS = [
+  { key: "0-7", label: "0-7 gün", hit: d => d <= 7 },
+  { key: "8-30", label: "8-30 gün", hit: d => d > 7 && d <= 30 },
+  { key: "31-90", label: "31-90 gün", hit: d => d > 30 && d <= 90 },
+  { key: "90+", label: "90+ gün", hit: d => d > 90 },
+];
+
+const MATRIX_SEVERITIES = [
+  { key: "critical", label: "Kritik" },
+  { key: "high", label: "Yüksek" },
+  { key: "medium", label: "Orta" },
+  { key: "low", label: "Düşük" },
+];
+
+// Hücrenin bandı içindeki bulgu sayısından değil, hücrenin kendi yerinden
+// gelir: bir risk matrisi sabit bir sınıflandırmadır, veri onu doldurur.
+// Yoğunluğa göre boyansaydı, tek bir kritik-ve-eski bulgu taşıyan hücre soluk
+// kalır, otuz tane yeni düşük bulgu taşıyan hücre kıpkırmızı yanardı.
+// Bandın adı bilerek kritikliğin adı değil. Satırlar zaten "Kritik / Yüksek /
+// Orta / Düşük" diyor; efsane de aynı kelimeleri kullansaydı okuyucu ikisini
+// aynı şey sanırdı. Band, kritiklik ile yaşın birleşimi — yani sıraya koyma
+// kararı, o yüzden yapılacak işin diliyle yazılıyor.
+const BAND_LABEL = ["izle", "sıraya al", "öncelikli", "acil"];
+
+function riskBand(sevIndex, ageIndex) {
+  // sevIndex 0 = kritik, ageIndex 0 = en yeni. Yaş kritikliğin yerine geçmez,
+  // onu ağırlaştırır: bu yüzden kritiklik iki kat sayılıyor. Doksan günlük bir
+  // "düşük", bir günlük bir "kritik" kadar acil değildir.
+  const severity = MATRIX_SEVERITIES.length - 1 - sevIndex;   // 0..3, büyük = kötü
+  const age = ageIndex;                                        // 0..3, büyük = eski
+  const score = severity * 2 + age;                            // 0..9
+  return score >= 7 ? 3 : score >= 5 ? 2 : score >= 3 ? 1 : 0;
+}
+
+// Seçili hücre: {sev, age} ya da null.
+let riskCell = null;
+
+function ageOf(f) {
+  return f.created_at ? daysApart(dayOf(f.created_at), today()) : 0;
+}
+
+function inCell(f, sevIndex, ageIndex) {
+  return (f.severity || "medium") === MATRIX_SEVERITIES[sevIndex].key
+    && AGE_BUCKETS[ageIndex].hit(ageOf(f));
+}
+
+function renderRisk() {
+  // Kapanmış bulgular yaşlanmaz — işleri bitmiştir. Onları saymak taşınan
+  // riski olduğundan büyük gösterirdi.
+  const open = myFindings.filter(f => !isClosed(f));
+  const table = document.getElementById("riskMatrix");
+  table.innerHTML = "";
+
+  const head = document.createElement("tr");
+  head.appendChild(document.createElement("td"));        // köşe boş
+  AGE_BUCKETS.forEach(b => {
+    const th = document.createElement("th");
+    th.scope = "col";
+    th.textContent = b.label;
+    head.appendChild(th);
+  });
+  table.appendChild(head);
+
+  MATRIX_SEVERITIES.forEach((sev, si) => {
+    const tr = document.createElement("tr");
+    const rowHead = document.createElement("th");
+    rowHead.scope = "row";
+    rowHead.textContent = sev.label;
+    tr.appendChild(rowHead);
+
+    AGE_BUCKETS.forEach((age, ai) => {
+      const n = open.filter(f => inCell(f, si, ai)).length;
+      const band = riskBand(si, ai);
+      const td = document.createElement("td");
+      td.className = "cell";
+      const btn = document.createElement("button");
+      btn.type = "button";
+      // "blank", "empty" değil: `.empty` bu sayfada zaten "hiç bulgu yok" boş
+      // durumunun sınıfı ve 3rem dolgusu var — hücreler onu miras alıyordu.
+      btn.className = "cell-btn band-" + band + (n ? "" : " blank")
+        + (riskCell && riskCell.sev === si && riskCell.age === ai ? " picked" : "");
+      // Ekran okuyucu için: renk tek başına bilgi taşımaz.
+      btn.setAttribute(
+        "aria-label",
+        `${sev.label} · ${age.label} · ${n} bulgu · öncelik: ${BAND_LABEL[band]}`
+      );
+      btn.textContent = n || "·";
+      btn.disabled = !n;
+      btn.onclick = () => {
+        riskCell = riskCell && riskCell.sev === si && riskCell.age === ai
+          ? null                                  // aynı hücreye tekrar tıklamak seçimi kaldırır
+          : { sev: si, age: ai };
+        renderRisk();
+      };
+      td.appendChild(btn);
+      tr.appendChild(td);
+    });
+    table.appendChild(tr);
+  });
+
+  renderMatrixLegend();
+  renderRiskList(open);
+}
+
+function renderMatrixLegend() {
+  const host = document.getElementById("matrixLegend");
+  host.innerHTML = "";
+  const lead = document.createElement("span");
+  lead.className = "legend-lead";
+  lead.textContent = "öncelik:";
+  host.appendChild(lead);
+  BAND_LABEL.forEach((label, band) => {
+    const item = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = "band-" + band;
+    item.appendChild(swatch);
+    item.appendChild(document.createTextNode(label));
+    host.appendChild(item);
+  });
+}
+
+function renderRiskList(open) {
+  const title = document.getElementById("riskListTitle");
+  const clear = document.getElementById("riskClear");
+  const list = document.getElementById("riskList");
+  const note = document.getElementById("riskNote");
+  list.innerHTML = "";
+  clear.classList.toggle("hidden", !riskCell);
+
+  if (!riskCell) {
+    title.textContent = "Bir hücre seç";
+    note.textContent = open.length
+      ? `${open.length} açık bulgu ızgaraya dağıtıldı. Bir hücreye tıkla, içindekiler burada listelensin.`
+      : "Açık bulgu yok.";
+    return;
+  }
+
+  const sev = MATRIX_SEVERITIES[riskCell.sev];
+  const age = AGE_BUCKETS[riskCell.age];
+  const rows = open
+    .filter(f => inCell(f, riskCell.sev, riskCell.age))
+    .sort((a, b) => ageOf(b) - ageOf(a));          // en eski üstte
+
+  title.textContent = `${sev.label} · ${age.label}`;
+
+  // Hücre, seçildikten sonra boşalabilir: buradan bir bulgunun durumu
+  // kapatılırsa artık açık bulgular arasında değildir. Seçimi zorla kaldırmak
+  // yerine boş olduğunu söylüyoruz — ızgara kendini yeniden çizdi, hücre
+  // hâlâ okuyucunun sorduğu soru.
+  if (!rows.length) {
+    note.textContent = "Bu hücrede açık bulgu kalmadı.";
+    return;
+  }
+
+  // Bulgularım'la aynı satır bileşeni: iki yerde iki farklı görünüm oluşmasın.
+  // Satırdaki denetimler loadFindings() çağırıyor, o da bu sayfa açıksa
+  // matrisi yeniden çiziyor — kritikliği değişen bir bulgu artık başka bir
+  // hücreye ait olabilir.
+  rows.forEach(f => list.appendChild(findingRow(f)));
+  note.textContent = `${rows.length} bulgu · en eskisi ${ageOf(rows[0])} günlük`;
+}
+
+document.getElementById("riskClear").onclick = () => { riskCell = null; renderRisk(); };
+
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -1317,6 +1495,7 @@ function setupTabs() {
       document.getElementById(VIEWS[v]).classList.remove("hidden");
       // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
       if (v === "dash") loadFindings().then(loadDash).catch(() => {});
+      if (v === "risk") loadFindings().catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
