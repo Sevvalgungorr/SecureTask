@@ -215,6 +215,44 @@ Tarama ve izleme de bir ekibe iş açabilir (`?team_id=`): sonuç, tarayıcıyı
 çalıştıran kişinin değil, işi yapacak ekibindir — aynı çıktıyı iki kişi
 yüklediğinde aynı bulgudan iki kopya oluşmaz.
 
+### SLA saati: pencerenin iki ucu
+
+Bir son tarih tek başına yalnızca ne kadar kaldığını söyler. Bulgunun **ne zaman
+açıldığı** ile birlikte, pencerenin ne kadarının harcandığını da söyler — "üç gün
+kaldı" ile "seksen yedi gündür kimse dokunmadı" arasındaki fark budur. **Ne zaman
+kapandığı** ile birlikte ise SLA'nın tutulup tutulmadığını söyler, ki bir düzeltme
+penceresi zaten bu sayıyı üretmek için vardır.
+
+Her bulgunun altında bu, bir çubuk olarak durur:
+
+```
+Kimlik doğrulaması olmayan yönetim ucu   KRİTİK  portal.example.test
+████████████████████████████████████████  4 gün geçti · SLA 14.08.26
+
+Oturum çerezinde SameSite ayarı yok      YÜKSEK  portal.example.test
+█████████████████████████░░░░░░░░░░░░░░░  3 gün kaldı · SLA 21.08.26
+
+Dizin listeleme açık                     ORTA    static.example.test
+▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒▒  4 gün gecikmeyle kapatıldı
+```
+
+Kabul edilmiş bir risk kendi geri sayımını gösterir — orada anlamlı olan düzeltme
+süresi değil, kabulün ne zaman biteceğidir: *"risk kabul · 40 gün sonra yeniden
+açılır"*.
+
+**`closed_at` elle tutulmuyor.** Uygulamada bir bulguyu açık/kapalı çizgisinin
+üzerinden geçiren altı yer var: bir düzenleme, doğrudan kabul edilmiş olarak
+açılması, düzeltildi işaretli bir bulguyu yeniden açan bir içe aktarma, artık
+geçen bir kontrolü kapatan monitör, yeniden bozulan kontrolü açan monitör ve
+süresi dolan bir kabul. Altı yerde elle tutulan bir zaman damgası yedincide
+yanlış olur — ve bu damga SLA'nın tutulup tutulmadığına karar veriyor. Bu yüzden
+`models.py` içinde `Finding.status` üzerine bir SQLAlchemy olay dinleyicisiyle
+**durumun tanımlandığı tek yerde** türetiliyor; unutulacak bir çağrı yeri yok.
+
+Sıra önemli: `fixed → accepted_risk` yeniden damgalamaz. Kapatma **sebebi**
+değişmiştir, kapalı olduğu değil — bulgu listeye hiç geri dönmedi. Yeniden
+damgalasaydı geç kapatılmış bir bulgu sessizce süresinde kapatılmış görünürdü.
+
 ### Risk kabulü: gerekçe, sahip ve bitiş
 
 Bir riski kabul etmek bulguyu kapatır — ama "düzeltildi" ile aynı şey değildir:
@@ -268,6 +306,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🚪 **Gerçek çıkış (single logout)** — sağlayıcının oturumu da kapatılır, sonraki giriş yeniden kimlik sorar
 - 🔎 **Bulgu kaydı** — başlık, kanıt, **varlık**, kritiklik, durum
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
+- ⏱️ **SLA zaman çubuğu** — her bulgunun altında penceresinin ne kadarının harcandığı; kapananlarda süresinde mi geç mi kapandığı, kabul edilen riskte geri sayım
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 👥 **Ekip ve atama** — bulgu bir ekibe ait olur, ekipteki herkes görür, biri üstlenir; kimin ilgilendiği listede yazar
 - ⚖️ **Görev ayrılığı** — riski yalnızca ekibin risk sahibi kabul edebilir ve o kişi bulguyu bildiren olamaz
@@ -281,8 +320,8 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 📋 **Denetim günlüğü** — kim, ne zaman, ne yaptı; kritiklik ve durum değişiklikleri ayrıca yazılır
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
-- 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 138 test, CI üzerinde her değişiklikte çalışır
+- 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
+- ✅ **Otomatik testler** — pytest ile 153 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -346,6 +385,12 @@ Kritiklik rampası tek hue'lu sıralı bir ölçektir ve açık/koyu tema için 
 doğrulanmıştır; `--danger` yalnızca "dikkat gerekiyor" (SLA aşımı) için ayrılmıştır,
 hiçbir zaman bir kritiklik seviyesi için kullanılmaz.
 
+Zaman baskısı bilerek bu rampanın dışında, kendi renkleriyle (kehribar → turuncu
+→ `--danger`) çizilir. Bir bulgunun iki bağımsız niteliği var — **ne kadar kötü**
+ve **ne kadar geç** — ve bir satırın "düşük kritiklikli ama üç aydır duruyor"
+diyebilmesi gerekiyor. İkisi aynı paleti kullansaydı bu iki okuma tek bir mora
+karışırdı.
+
 > **Not:** Bu depodaki tüm örnek veriler uydurmadır (`*.example.test`). Gerçek
 > sistem adları, IP'ler ve bulgu detayları bir açık envanterinin en hassas
 > kısmıdır; herkese açık bir depoya konmaz.
@@ -407,7 +452,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 138 test
+pytest                                      # 153 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -445,6 +490,8 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 
 ```
 Finding    id · title · description · asset · severity · status · due_date
+           created_at · closed_at            (SLA penceresinin iki ucu)
+           evidence · evidence_start · evidence_line   (raporun getirdiği kod)
            source · source_ref · source_severity
            owner_id (bildiren) · team_id · assignee_id
            accepted_reason · accepted_until · accepted_at · accepted_by_id

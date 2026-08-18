@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from sqlalchemy import (
     Boolean,
     Column,
@@ -8,6 +10,7 @@ from sqlalchemy import (
     Integer,
     String,
     UniqueConstraint,
+    event,
     func,
 )
 
@@ -101,6 +104,17 @@ class Finding(Base):
     # Remediation deadline. Derived from severity at creation time when the
     # reporter does not set one — see SLA_DAYS.
     due_date = Column(Date)
+    # When the clock started. A deadline on its own says how much time is left;
+    # it takes the start to say how much of the window has been used, which is
+    # the difference between "due in three days" and "nobody has touched this
+    # for eighty-seven days".
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # When it stopped. Set against the deadline this is whether the SLA was met
+    # — the measure the whole remediation window exists to produce. Maintained
+    # by the listener below rather than by hand; see there for why.
+    closed_at = Column(DateTime(timezone=True))
     # Where the finding came from: "manual" or a scanner name. Together with
     # source_ref this is what makes a re-scan update the existing finding
     # instead of filing a duplicate.
@@ -160,6 +174,30 @@ class Finding(Base):
         # The lookup an import does for every incoming result.
         Index("ix_findings_dedupe", "owner_id", "asset", "source_ref"),
     )
+
+
+@event.listens_for(Finding.status, "set")
+def _stamp_closed_at(finding, new, old, initiator):
+    """Keep closed_at in step with status, wherever the status is set.
+
+    Six places move a finding across that line: an edit, filing one as already
+    accepted, an import reopening something marked fixed, the monitor closing a
+    check that now passes, the monitor reopening one that does not, and an
+    acceptance expiring. A timestamp maintained at six call sites is a
+    timestamp that is wrong at the seventh, and this one decides whether an SLA
+    was met — so it is derived here, at the one place status is defined, and
+    cannot be forgotten.
+    """
+    if new == old:
+        return
+
+    if new in CLOSED_STATUSES:
+        # Only the first close stamps it. fixed → accepted_risk is a change of
+        # reason, not a reopening, and the finding never went back on the list.
+        if old not in CLOSED_STATUSES:
+            finding.closed_at = datetime.now(timezone.utc)
+    else:
+        finding.closed_at = None
 
 
 class Asset(Base):

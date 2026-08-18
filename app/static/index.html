@@ -111,10 +111,22 @@
         <p class="chart-note" id="actNote"></p>
       </div>
 
-      <div class="admin-block">
-        <div class="list-head"><h2>Kritiklik dağılımı</h2><span class="badge">açık bulgular</span></div>
-        <div class="stack" id="sevStack"></div>
-        <div class="legend" id="sevLegend"></div>
+      <!-- İki kısa panel bir sütunda: ızgarada tek tek dursalardı her biri
+           yanındaki uzun panelin boyunda bir satır açar, altlarında iki tane
+           boşluk kalırdı. Aynı soruyu iki açıdan soruyorlar — biri neyi
+           taşıdığımızı, öbürü ne zamana kadar. -->
+      <div class="dash-col">
+        <div class="admin-block">
+          <div class="list-head"><h2>Kritiklik dağılımı</h2><span class="badge">açık bulgular</span></div>
+          <div class="stack" id="sevStack"></div>
+          <div class="legend" id="sevLegend"></div>
+        </div>
+
+        <div class="admin-block">
+          <div class="list-head"><h2>SLA durumu</h2><span class="badge">açık bulgular</span></div>
+          <div class="sla-buckets" id="slaBuckets"></div>
+          <p class="chart-note" id="slaNote"></p>
+        </div>
       </div>
 
       <div class="admin-block">

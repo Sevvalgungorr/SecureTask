@@ -152,6 +152,28 @@ def test_a_regression_reopens_the_finding(client, checks):
     assert client.get("/findings").json()[0]["status"] == "open"
 
 
+def test_the_monitor_stamps_and_clears_the_close_time(client, checks):
+    """The monitor closes and reopens findings without anyone editing a row, so
+    it is the likeliest place for the SLA clock to drift out of step with the
+    status — a finding left carrying a close time while sitting open would be
+    counted as remediated by every figure built on it."""
+    client.login_as("alice")
+    _register(client)
+    checks["app.example.test"] = [_result()]
+    client.post("/monitor/run")
+    assert client.get("/findings").json()[0]["closed_at"] is None
+
+    checks["app.example.test"] = []          # check passes again
+    client.post("/monitor/run")
+    assert client.get("/findings").json()[0]["closed_at"] is not None
+
+    checks["app.example.test"] = [_result()]  # and breaks again
+    client.post("/monitor/run")
+    finding = client.get("/findings").json()[0]
+    assert finding["status"] == "open"
+    assert finding["closed_at"] is None
+
+
 def test_worsening_evidence_escalates_severity(client, checks):
     """A certificate with two days left is a different fact, not a re-argument."""
     client.login_as("alice")
