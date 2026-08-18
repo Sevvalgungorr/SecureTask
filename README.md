@@ -21,6 +21,11 @@ Uygulamanın tamamı bu altı adımı taşımak için var.
 
 ![Giriş ekranı](docs/images/login.png)
 
+Çalışma yüzeyi — her bulgunun altında SLA penceresinin ne kadarının harcandığı,
+kod bulgularının altında taramanın baktığı satırlar:
+
+![Bulgu listesi](docs/images/findings.png)
+
 ## Tehdit modeli
 
 Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir.
