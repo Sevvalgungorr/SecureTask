@@ -163,3 +163,74 @@ def test_the_import_is_logged_with_the_tool_name(client):
     entry = next(e for e in client.get("/audit/me").json() if e["action"] == "imported")
     assert "codeql" in entry["detail"]
     assert "1 yeni" in entry["detail"]
+
+
+def _with_snippet(rule_id="python.lang.security.dangerous-subprocess",
+                  uri="app/main.py", start=41, hit=42):
+    return {
+        "ruleId": rule_id,
+        "level": "error",
+        "message": {"text": "Güvensiz alt süreç çağrısı"},
+        "locations": [{
+            "physicalLocation": {
+                "artifactLocation": {"uri": uri},
+                "region": {"startLine": hit, "snippet": {"text": "    subprocess.run(cmd, shell=True)\n"}},
+                "contextRegion": {
+                    "startLine": start,
+                    "snippet": {"text": "def run(cmd):\n    subprocess.run(cmd, shell=True)\n    return 0\n"},
+                },
+            }
+        }],
+    }
+
+
+def test_the_report_brings_its_own_code(client):
+    """The repository is never cloned; the snippet is what the report carried."""
+    client.login_as("alice")
+    _post(client, _sarif([_with_snippet()]))
+
+    finding = client.get("/findings").json()[0]
+    assert "subprocess.run(cmd, shell=True)" in finding["evidence"]
+    assert finding["evidence_start"] == 41      # blok nerede başlıyor
+    assert finding["evidence_line"] == 42       # kural hangi satırda tetiklendi
+
+
+def test_context_lines_are_preferred_over_the_bare_line(client):
+    """A rule that fires on one line is easier to judge with its surroundings."""
+    client.login_as("alice")
+    _post(client, _sarif([_with_snippet()]))
+
+    evidence = client.get("/findings").json()[0]["evidence"]
+    assert "def run(cmd):" in evidence          # contextRegion'dan
+    assert evidence.count("\n") >= 2
+
+
+def test_a_finding_without_a_snippet_simply_has_none(client):
+    client.login_as("alice")
+    _post(client, _sarif([_result()]))
+
+    assert client.get("/findings").json()[0]["evidence"] is None
+
+
+def test_a_later_report_refreshes_the_snippet(client):
+    """Code moves. Severity is a judgement and stays; the quoted lines are just
+    the current evidence."""
+    client.login_as("alice")
+    _post(client, _sarif([_with_snippet(start=41, hit=42)]))
+    _post(client, _sarif([_with_snippet(start=98, hit=99)]))
+
+    finding = client.get("/findings").json()[0]
+    assert finding["evidence_line"] == 99
+    assert finding["evidence_start"] == 98
+
+
+def test_a_snippet_cannot_be_used_to_store_a_file(client):
+    """A snippet is context for one finding, not a place to put a repository."""
+    from app.importers import MAX_EVIDENCE
+
+    client.login_as("alice")
+    huge = dict(_with_snippet())
+    huge["locations"][0]["physicalLocation"]["contextRegion"]["snippet"]["text"] = "x" * 20000
+    _post(client, _sarif([huge]))
+
+    assert len(client.get("/findings").json()[0]["evidence"]) <= MAX_EVIDENCE

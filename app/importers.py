@@ -37,6 +37,16 @@ class ScanResult:
     asset: str
     severity: str
     description: str
+    # Optional: the lines the report carried with it. A network scan has none.
+    evidence: str = ""
+    evidence_start: int | None = None
+    evidence_line: int | None = None
+
+
+# A snippet is quoted source code from someone's repository. Long enough to
+# show the line in context, short enough that a report cannot use this as a
+# way to store a file.
+MAX_EVIDENCE = 4000
 
 
 def _asset_of(entry: dict) -> str:
@@ -196,6 +206,34 @@ def _location_of(result: dict) -> tuple[str, str]:
     return uri.lstrip("/")[:255], (f"satır {line}" if line else "")
 
 
+def _evidence_of(result: dict) -> tuple[str, int | None, int | None]:
+    """The quoted source the report brought, if it brought any.
+
+    `contextRegion` is preferred over `region`: a rule that fires on one line
+    is easier to judge with the lines around it, and the scanner already
+    decided how much context is fair to include.
+    """
+    locations = result.get("locations") or []
+
+    if not locations or not isinstance(locations[0], dict):
+        return "", None, None
+
+    physical = locations[0].get("physicalLocation") or {}
+    region = physical.get("region") or {}
+    context = physical.get("contextRegion") or {}
+    block = context if context.get("snippet") else region
+
+    text = str((block.get("snippet") or {}).get("text") or "")
+
+    if not text.strip():
+        return "", None, None
+
+    def _int(value):
+        return value if isinstance(value, int) and value > 0 else None
+
+    return text[:MAX_EVIDENCE], _int(block.get("startLine")), _int(region.get("startLine"))
+
+
 def parse_sarif(raw: str) -> tuple[list[ScanResult], int, str]:
     """Return the usable results, how many were unusable, and the tool's name.
 
@@ -254,6 +292,8 @@ def parse_sarif(raw: str) -> tuple[list[ScanResult], int, str]:
             short = str((rule.get("shortDescription") or {}).get("text") or "").strip()
             title = (short or message or rule_id)[:200]
 
+            evidence, ev_start, ev_line = _evidence_of(entry)
+
             results.append(
                 ScanResult(
                     source_ref=rule_id[:255],
@@ -261,6 +301,9 @@ def parse_sarif(raw: str) -> tuple[list[ScanResult], int, str]:
                     asset=asset,
                     severity=severity,
                     description=" · ".join(p for p in (message, line) if p)[:2000],
+                    evidence=evidence,
+                    evidence_start=ev_start,
+                    evidence_line=ev_line,
                 )
             )
 

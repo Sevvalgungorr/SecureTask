@@ -84,6 +84,10 @@ class FindingResponse(FindingCreate):
     # Only the import endpoint sets these.
     source: str = "manual"
     source_ref: str = ""
+    # Read-only, and only ever set by an importer: the lines the report carried.
+    evidence: str | None = None
+    evidence_start: int | None = None
+    evidence_line: int | None = None
     # Who accepted the risk and when. Set by the server from the session that
     # cleared step-up; a client cannot name someone else as the approver.
     accepted_at: datetime | None = None

@@ -120,6 +120,18 @@ class Finding(Base):
     accepted_at = Column(DateTime(timezone=True))
     accepted_by_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
 
+    # The lines the scanner was looking at when it fired, as the report itself
+    # carried them. Nothing is fetched to build this: the repository is never
+    # cloned, so the only code here is the code the report chose to include.
+    #
+    # It can contain the very thing the rule flagged — a hardcoded-secret
+    # finding quotes the secret. That is why it inherits the finding's access
+    # control rather than living anywhere more public, and why it is capped.
+    evidence = Column(String(4000))
+    # Where the snippet starts, and which line inside it is the finding.
+    evidence_start = Column(Integer)
+    evidence_line = Column(Integer)
+
     # What the source last rated this, as opposed to what the row now says.
     # Keeping the two apart is what lets a re-run tell "the evidence got worse"
     # (the source's rating rose) from "a person disagreed with the tool" (the
