@@ -25,6 +25,13 @@
     --sev-2: #8b5cf6;
     --sev-3: #6d28d9;
     --sev-4: #4c1d95;
+    /* Time pressure, deliberately outside the severity ramp above. A finding
+       has two independent qualities — how bad it is, and how late it is — and
+       a row has to be able to say "low severity, badly overdue" without the
+       two readings blurring into one purple. Amber -> orange -> --danger is
+       the only place these hues appear. */
+    --sla-warm: #f59e0b;
+    --sla-hot: #f97316;
     --sh-sm: 0 1px 2px rgba(24,20,48,.05);
     --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
     --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
@@ -54,6 +61,9 @@
       --sev-2: #8257ee;
       --sev-3: #a78bfa;
       --sev-4: #cbb9ff;
+      /* Lifted for the dark surface; the amber -> orange direction is kept. */
+      --sla-warm: #fbbf24;
+      --sla-hot: #fb923c;
       --sh-sm: 0 1px 2px rgba(0,0,0,.4);
       --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
       --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
@@ -114,6 +124,10 @@
   .dash-grid { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr);
                gap: 1.4rem; margin-bottom: 1.9rem; align-items: start; }
   .dash-grid > .admin-block { margin-bottom: 0; }
+  /* Bir ızgara hücresine iki panel yığmak için. align-content: start olmasa
+     ikisi hücrenin yüksekliğine yayılır ve aralarındaki boşluk açılırdı. */
+  .dash-col { display: grid; gap: 1.4rem; align-content: start; min-width: 0; }
+  .dash-col > .admin-block { margin-bottom: 0; }
   @media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); gap: 1.1rem; } }
 
   /* Geniş ekranda bir bulgu satırı: başlık solda, ölçüler sağda hizalı. Kart
@@ -122,9 +136,11 @@
     li.finding .meta { margin-top: 0; flex-shrink: 0; justify-content: flex-end; }
     li.finding > .body { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap; }
     li.finding .body > .title-wrap { flex: 1; min-width: 0; }
-    /* Kanıt bloğu kendi satırını alır. Kardeş olarak kalsaydı esnek kutu onu
-       en dar hâline sıkıştırır, kod harf harf sarılırdı. */
+    /* Kanıt bloğu ve zaman çubuğu kendi satırlarını alır. Kardeş olarak
+       kalsalardı esnek kutu onları en dar hâllerine sıkıştırırdı: kod harf
+       harf sarılır, çubuk da okunamayacak kadar kısalırdı. */
     li.finding .body > .evidence { flex-basis: 100%; min-width: 0; }
+    li.finding .body > .sla { flex-basis: 100%; min-width: 0; margin-top: .1rem; }
     .add { max-width: 760px; }
     .import-row { max-width: 760px; }
   }
@@ -235,10 +251,53 @@
   .assignee { font-size: .74rem; color: var(--muted); }
   .assignee.none { font-style: italic; opacity: .8; }
 
-  .due { display: inline-flex; align-items: center; gap: .28rem; font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
-  .due svg { width: 12px; height: 12px; }
+  /* --- SLA zaman çubuğu ---------------------------------------------------
+     Kritiklik rengi ne kadar kötü olduğunu söyler; bu çubuk ne kadar
+     geciktiğini. Bilerek ayrı bir renk ailesi: ikisi aynı paleti kullansaydı
+     "kritik" ile "geç kalınmış" satırda birbirine karışırdı. */
+  .sla { display: flex; align-items: center; gap: .55rem; margin-top: .4rem; min-width: 0; }
+  .sla .track {
+    flex: 1; min-width: 60px; height: 5px; border-radius: 999px; overflow: hidden;
+    background: color-mix(in srgb, var(--ink) 9%, transparent);
+  }
+  .sla .track > i {
+    display: block; height: 100%; border-radius: 999px;
+    background: var(--sla-c); transition: width .35s ease;
+  }
+  .sla-label {
+    display: inline-flex; align-items: center; gap: .28rem; flex-shrink: 0;
+    font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums;
+  }
+  .sla-label svg { width: 12px; height: 12px; }
+
+  .sla-ok    { --sla-c: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .sla-warn  { --sla-c: var(--sla-warm); }
+  .sla-hot   { --sla-c: var(--sla-hot); }
   /* Reserved status colour: a missed remediation deadline, not a severity. */
-  .due.overdue { color: var(--danger); font-weight: 700; }
+  .sla-over  { --sla-c: var(--danger); }
+  .sla-over .sla-label { color: var(--danger); font-weight: 700; }
+  /* Kabul edilmiş risk geri sayımı: SLA değil, kabulün kendi bitişi. */
+  .sla-accept { --sla-c: var(--sev-3); }
+  .sla-accept .track { opacity: .75; }
+  /* Kapanmış bulgu: çubuk dolu ama sessiz — anlatacak bir aciliyeti kalmadı. */
+  .sla-done  { --sla-c: var(--ok); }
+  .sla-done .track, .sla-done-late .track { opacity: .5; }
+  .sla-done-late { --sla-c: var(--danger); }
+  .sla-done-late .sla-label { color: var(--danger); }
+
+  /* Panodaki SLA kovaları. Satır başına bir çubuk; en kalabalık kova tam boy,
+     diğerleri ona oranlı — kovalar birbiriyle karşılaştırılsın diye. */
+  .sla-buckets { display: grid; gap: .5rem; }
+  .sla-bucket { display: grid; grid-template-columns: 6.5rem minmax(0, 1fr) 2rem; align-items: center; gap: .6rem; }
+  .b-lbl { font-size: .76rem; color: var(--muted); }
+  .b-track { height: 8px; border-radius: 999px; background: color-mix(in srgb, var(--ink) 7%, transparent); overflow: hidden; }
+  .b-track > i { display: block; height: 100%; border-radius: 999px; background: var(--b-c); transition: width .4s ease; }
+  .b-n { font-size: .8rem; font-variant-numeric: tabular-nums; text-align: right; }
+  .b-over  { --b-c: var(--danger); }
+  .b-soon  { --b-c: var(--sla-hot); }
+  .b-week  { --b-c: var(--sla-warm); }
+  .b-later { --b-c: color-mix(in srgb, var(--accent) 45%, transparent); }
+  .b-over .b-lbl, .b-over .b-n { color: var(--danger); font-weight: 700; }
 
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }

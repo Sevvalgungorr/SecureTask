@@ -74,6 +74,91 @@ function today() { return new Date().toISOString().slice(0, 10); }
 // go on being late.
 function isOverdue(f) { return f.due_date && !isClosed(f) && f.due_date < today(); }
 
+// Gün farkı. Saat dilimi tuzağına düşmemek için iki tarih de aynı biçimde,
+// yerel gece yarısına sabitlenerek okunuyor — biri UTC biri yerel olsaydı
+// "1 gün kaldı" ile "süresi doldu" arasındaki fark saat kaça baktığına
+// bağlı olurdu.
+function daysApart(fromDay, toDay) {
+  const ms = Date.parse(toDay + "T00:00:00") - Date.parse(fromDay + "T00:00:00");
+  return Math.round(ms / 86400000);
+}
+const dayOf = ts => (ts ? ts.slice(0, 10) : null);
+
+// Bulgunun zaman çubuğu: pencerenin ne kadarı harcandı.
+//
+// Kritiklik ne kadar kötü olduğunu söyler, bu çubuk ne kadar geciktiğini.
+// İkisi ayrı sorular: düşük kritiklikli ama doksan gündür duran bir bulgu,
+// dün açılmış bir yüksek kritiklikliden daha çok ihmal edilmiştir.
+function slaBar(f) {
+  const now = today();
+  let from, to, kind, text, icon = false;
+
+  if (f.status === "accepted_risk" && f.accepted_until) {
+    // Kabul edilmiş bir risk için geri sayım artık düzeltme süresi değil,
+    // kabulün kendisi: önemli olan ne zaman geri geleceği.
+    from = dayOf(f.accepted_at) || dayOf(f.created_at) || now;
+    to = f.accepted_until;
+    const left = daysApart(now, to);
+    kind = "accept";
+    text = left > 0
+      ? `risk kabul · ${left} gün sonra yeniden açılır`
+      : "kabul süresi doldu · yeniden açılacak";
+  } else if (isClosed(f)) {
+    const closed = dayOf(f.closed_at);
+    // Kapanış zamanı bilinmiyorsa geç kalınıp kalınmadığı da bilinmiyor.
+    // "Süresinde kapatıldı" ölçülen bir iddiadır; tahmin edilmez.
+    const late = closed && f.due_date ? daysApart(f.due_date, closed) : null;
+    return doneBar(
+      late === null ? "kapatıldı"
+        : late <= 0 ? "süresinde kapatıldı"
+        : `${late} gün gecikmeyle kapatıldı`,
+      late !== null && late > 0
+    );
+  } else if (f.due_date && f.created_at) {
+    from = dayOf(f.created_at);
+    to = f.due_date;
+    const left = daysApart(now, to);
+    text = left < 0 ? `${-left} gün geçti`
+      : left === 0 ? "bugün son gün"
+      : `${left} gün kaldı`;
+    text += " · SLA " + fmtDate(to);
+    icon = true;
+  } else {
+    return null;
+  }
+
+  // Pencere aynı gün içinde kapanıyorsa bölme sıfıra düşer; bir gün say.
+  const total = Math.max(1, daysApart(from, to));
+  const used = daysApart(from, now);
+  const pct = Math.max(0, Math.min(1, used / total));
+
+  if (!kind) {
+    kind = used > total ? "over" : pct >= 0.85 ? "hot" : pct >= 0.6 ? "warn" : "ok";
+  }
+
+  return barEl(kind, pct, text, icon);
+}
+
+function barEl(kind, pct, text, icon) {
+  const wrap = document.createElement("div");
+  wrap.className = "sla sla-" + kind;
+  const track = document.createElement("div");
+  track.className = "track";
+  const fill = document.createElement("i");
+  // Genişlik CSSOM üzerinden; işaretteki style="" özniteliğini CSP zaten
+  // engelliyor olurdu.
+  fill.style.width = (pct * 100).toFixed(1) + "%";
+  track.appendChild(fill);
+  const label = document.createElement("span");
+  label.className = "sla-label";
+  if (icon) label.innerHTML = CAL;         // static icon markup only
+  label.appendChild(document.createTextNode(text));
+  wrap.append(track, label);
+  return wrap;
+}
+
+const doneBar = (text, late) => barEl(late ? "done-late" : "done", 1, text, false);
+
 function memberName(teamId, userId) {
   const team = teamById(teamId);
   const member = team && team.members.find(m => m.user_id === userId);
@@ -115,15 +200,8 @@ function findingMeta(f) {
       : "atanmamış";
     meta.appendChild(who);
   }
-  if (f.due_date) {
-    const due = document.createElement("span");
-    due.className = "due" + (isOverdue(f) ? " overdue" : "");
-    const label = document.createElement("span");
-    label.textContent = "SLA " + fmtDate(f.due_date) + (isOverdue(f) ? " · aşıldı" : "");
-    due.innerHTML = CAL;                  // static icon markup only
-    due.appendChild(label);
-    meta.appendChild(due);
-  }
+  // Tarih artık burada değil: onu zaman çubuğu taşıyor. Bir satırda iki kez
+  // yazsaydı, ikisinden hangisinin bakılacağı belirsiz olurdu.
   return meta;
 }
 
@@ -344,6 +422,8 @@ function findingRow(f) {
   }
   body.appendChild(wrap);
   body.appendChild(findingMeta(f));
+  const clock = slaBar(f);
+  if (clock) body.appendChild(clock);
   const code = evidenceBlock(f);
   if (code) body.appendChild(code);
   if (f.status === "accepted_risk" && f.accepted_reason) {
@@ -851,6 +931,8 @@ function adminFindingRow(f) {
   }
   body.appendChild(wrap);
   body.appendChild(findingMeta(f));
+  const clock = slaBar(f);
+  if (clock) body.appendChild(clock);
 
   const owner = document.createElement("span");
   owner.className = "owner-badge"; owner.textContent = "sahip #" + f.owner_id;
@@ -1048,6 +1130,60 @@ function renderSeverity(findings) {
   });
 }
 
+// Açık bulguların kalan süreye göre dağılımı.
+//
+// Kritiklik dağılımı "neyi taşıyoruz" sorusunu yanıtlar; bu panel "neye ne
+// zaman bakmak zorundayız" sorusunu. Bir listenin tamamı düşük kritiklikli
+// olabilir ve yine de tamamı süresi geçmiş olabilir.
+const SLA_BUCKETS = [
+  { key: "over", label: "aşıldı", hit: d => d < 0 },
+  { key: "soon", label: "3 gün içinde", hit: d => d >= 0 && d <= 3 },
+  { key: "week", label: "bu hafta", hit: d => d > 3 && d <= 7 },
+  { key: "later", label: "sonrası", hit: d => d > 7 },
+];
+
+function renderSlaBuckets(open) {
+  const host = document.getElementById("slaBuckets");
+  const note = document.getElementById("slaNote");
+  host.innerHTML = "";
+
+  const now = today();
+  const dated = open.filter(f => f.due_date);
+  const counts = SLA_BUCKETS.map(b => ({
+    ...b,
+    n: dated.filter(f => b.hit(daysApart(now, f.due_date))).length,
+  }));
+  // Ölçek en kalabalık kovaya göre: çubuklar birbiriyle karşılaştırılsın diye,
+  // toplama göre olsaydı hepsi birden kısalırdı.
+  const peak = Math.max(1, ...counts.map(c => c.n));
+
+  counts.forEach(c => {
+    const row = document.createElement("div");
+    row.className = "sla-bucket b-" + c.key;
+    const label = document.createElement("span");
+    label.className = "b-lbl";
+    label.textContent = c.label;
+    const track = document.createElement("div");
+    track.className = "b-track";
+    const fill = document.createElement("i");
+    fill.style.width = (c.n / peak) * 100 + "%";
+    track.appendChild(fill);
+    const n = document.createElement("b");
+    n.className = "b-n";
+    n.textContent = c.n;
+    row.append(label, track, n);
+    host.appendChild(row);
+  });
+
+  const undated = open.length - dated.length;
+  const parts = [];
+  if (!open.length) parts.push("Açık bulgu yok.");
+  else if (counts[0].n) parts.push(`${counts[0].n} bulgunun süresi geçti.`);
+  else parts.push("Süresi geçen bulgu yok.");
+  if (undated) parts.push(`${undated} bulgunun tarihi yok.`);
+  note.textContent = parts.join(" ");
+}
+
 async function loadDash() {
   const findings = myFindings;
   const open = findings.filter(f => !isClosed(f));
@@ -1068,6 +1204,7 @@ async function loadDash() {
   document.getElementById("kOverdueCard").classList.toggle("alert", overdue > 0);
 
   renderSeverity(open);
+  renderSlaBuckets(open);
 
   const days = lastDays(14);
   const log = await api("/audit/me");

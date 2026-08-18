@@ -84,6 +84,11 @@ class FindingResponse(FindingCreate):
     # Only the import endpoint sets these.
     source: str = "manual"
     source_ref: str = ""
+    # The remediation window's two ends. Both are the server's to set: a client
+    # that could name its own creation time could file a finding that was
+    # already late, or one that never ages.
+    created_at: datetime
+    closed_at: datetime | None = None
     # Read-only, and only ever set by an importer: the lines the report carried.
     evidence: str | None = None
     evidence_start: int | None = None
