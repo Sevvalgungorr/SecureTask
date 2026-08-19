@@ -77,10 +77,46 @@
     font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     line-height: 1.5; -webkit-font-smoothing: antialiased;
   }
+  /* --- Hareket -------------------------------------------------------------
+     Veri ekrana birden bire basılırsa arayüz donuk durur: çubuk tam boyunda
+     belirir, sayı hazır gelir, halka dolu başlar. Hiçbiri "geldiğini"
+     göstermez. Buradaki her şey aynı işi yapıyor — bir değerin sıfırdan
+     kendisine gitmesini görünür kılmak.
+
+     Tamamı `no-preference` içinde: hareketi kapatmış birine hiçbiri
+     çalışmıyor ve arayüz eksiksiz kalıyor. Animasyon bir değerin ulaştığı
+     yeri değil, oraya nasıl gittiğini anlatır. */
   @media (prefers-reduced-motion: no-preference) {
     .finding, .btn, .stat-pill, .chip, .tab, .icon-btn, .ring-fg { transition: all .2s cubic-bezier(.4,0,.2,1); }
     @keyframes rise { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
-    li.finding { animation: rise .28s ease both; }
+    /* Sıra sırayla gelir. Hepsi aynı anda gelseydi tek bir sıçrama olurdu;
+       kademe, listeyi okunacak bir şey gibi gösteriyor. Gecikme sınırlı:
+       otuz satırlık bir listede son satır yarım saniyeden geç gelmemeli. */
+    li.finding { animation: rise .28s ease both; animation-delay: calc(var(--i, 0) * 28ms); }
+
+    /* Sütunlar tabandan büyür. transform-box: fill-box olmadan SVG'de
+       transform-origin öğenin kendi kutusuna değil, tuvale göre çözülür. */
+    @keyframes grow-up { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+    .chart .bar {
+      transform-box: fill-box; transform-origin: bottom;
+      animation: grow-up .5s cubic-bezier(.2,.8,.3,1) both;
+      animation-delay: calc(var(--i, 0) * 22ms);
+    }
+
+    /* Genişliği JS sıfırdan gerçek değerine çeviriyor; geçişi bunlar yapıyor. */
+    .stack > span { transition: flex-grow .45s cubic-bezier(.2,.8,.3,1); }
+
+    @keyframes pop { from { opacity: 0; transform: scale(.92); } to { opacity: 1; transform: none; } }
+    .cell-btn { animation: pop .3s ease both; animation-delay: calc(var(--i, 0) * 18ms); }
+
+    /* Sekme değişimi: içerik yerine oturur, öylece belirmez. */
+    @keyframes view-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+    .view-enter { animation: view-in .22s ease both; }
+
+    /* Halka boştan doluya süpürüyor. Yukarıdaki genel .2s bir geri bildirim
+       süresi; bir yüzdenin çizilmesi için kısa — ve seçici daha özgül olmasa
+       onu ezemezdi. */
+    .ring .ring-fg { transition: stroke-dashoffset .8s cubic-bezier(.2,.8,.3,1); }
   }
 
   header {
@@ -516,6 +552,10 @@
     display: grid; place-items: center; font-size: .74rem; font-weight: 800;
     /* Not a fixed white: on dark the ramp runs light, so the label must flip too. */
     color: var(--accent-ink); min-width: 2px; overflow: hidden;
+    /* Yerleşim burada, veri JS'te: JS yalnızca flex-grow'u yazıyor, o da
+       geçişi olan tek özellik. `flex` kısayolu atansaydı her yazışta üçü
+       birden değişir ve geçiş tutmazdı. */
+    flex-basis: 0; flex-shrink: 1;
   }
   .stack .s1 { background: var(--sev-1); }
   .stack .s2 { background: var(--sev-2); }

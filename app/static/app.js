@@ -2,6 +2,47 @@ const KEY = "securetask_token";
 const token = () => localStorage.getItem(KEY);
 const RING_C = 2 * Math.PI * 36;
 
+// Hareketi kapatmış biri için JS de susar. CSS tarafı zaten
+// `prefers-reduced-motion: no-preference` içinde; burası onun ikizi, çünkü
+// sayı sayma ve "önce sıfır, sonra değer" numarası CSS'te yapılamıyor.
+const MOTION = !matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+// Bir değeri sıfırdan kendisine götür. Öğe zaten son değeriyle doğduğu için
+// CSS geçişinin tutunacağı bir "önce" hâli yok; onu burada veriyoruz.
+function animateTo(el, prop, value) {
+  if (!MOTION) { el.style[prop] = value; return; }
+  el.style[prop] = prop === "flexGrow" ? "0" : "0%";
+  // İki kare: biri sıfırın boyanması, biri geçişin başlaması için. Tek
+  // requestAnimationFrame ile tarayıcı ikisini birleştirir ve geçiş atlanır.
+  requestAnimationFrame(() => requestAnimationFrame(() => { el.style[prop] = value; }));
+}
+
+// Sayaç. Bir KPI'nın sıfırdan değerine sayması, sayının nereden geldiğini
+// gösteriyor — hazır basılan bir rakam hiçbir şey anlatmaz.
+function countTo(el, value, suffix = "") {
+  // Her yeni sayaç öncekini geçersiz kılar. Sekmeler arasında hızlı gidip
+  // gelmek loadDash'i tekrar çağırıyor; iki tur aynı öğeye yazsaydı sayı iki
+  // hedef arasında titrerdi. (toast da aynı deseni kullanıyor.)
+  const token = (el._count = (el._count || 0) + 1);
+  if (!MOTION || value <= 0) { el.textContent = value + suffix; return; }
+  // Başlangıç, ilk karenin kendi zaman damgasından alınıyor —
+  // performance.now()'dan değil. requestAnimationFrame geri çağrısına
+  // *içinde bulunulan karenin* başlangıç zamanı geçilir; çağrı o kare
+  // sürerken yapılmışsa bu damga çağrıdan öncedir, geçen süre negatif çıkar
+  // ve sayaç bir an için eksi bir sayı basar.
+  let started = null;
+  const step = now => {
+    if (el._count !== token) return;          // daha yenisi başladı, bu tur bırakır
+    if (started === null) started = now;
+    const t = Math.min(1, (now - started) / 600);
+    // Sonda yavaşlar: hızlanarak biten bir sayaç okunmaz.
+    const eased = 1 - Math.pow(1 - t, 3);
+    el.textContent = Math.round(value * eased) + suffix;
+    if (t < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+}
+
 function toast(msg) {
   const t = document.getElementById("toast");
   t.textContent = msg; t.classList.add("show");
@@ -147,7 +188,7 @@ function barEl(kind, pct, text, icon) {
   const fill = document.createElement("i");
   // Genişlik CSSOM üzerinden; işaretteki style="" özniteliğini CSP zaten
   // engelliyor olurdu.
-  fill.style.width = (pct * 100).toFixed(1) + "%";
+  animateTo(fill, "width", (pct * 100).toFixed(1) + "%");
   track.appendChild(fill);
   const label = document.createElement("span");
   label.className = "sla-label";
@@ -501,10 +542,20 @@ function startEdit(li, f) {
 function setStats(findings) {
   const total = findings.length, closed = findings.filter(isClosed).length;
   const pct = total ? Math.round(closed / total * 100) : 0;
-  document.getElementById("stDone").textContent = closed;
-  document.getElementById("stPend").textContent = total - closed;
-  document.getElementById("ringPct").textContent = pct + "%";
-  document.getElementById("ringFg").style.strokeDashoffset = RING_C * (1 - pct / 100);
+  countTo(document.getElementById("stDone"), closed);
+  countTo(document.getElementById("stPend"), total - closed);
+  countTo(document.getElementById("ringPct"), pct, "%");
+  // Halka boştan başlayıp doluyor. Doğrudan atansaydı CSS geçişi yalnızca
+  // *değişimlerde* çalışır, ilk yüklemede halka zaten dolu görünürdü.
+  const ring = document.getElementById("ringFg");
+  const target = RING_C * (1 - pct / 100);
+  if (!MOTION) ring.style.strokeDashoffset = target;
+  else {
+    ring.style.strokeDashoffset = RING_C;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      ring.style.strokeDashoffset = target;
+    }));
+  }
 }
 
 // Aranan metin başlıkta, varlıkta, açıklamada ve kuralın kimliğinde aranır —
@@ -534,7 +585,13 @@ function renderMyList() {
   const list = document.getElementById("findingList");
   document.getElementById("emptyState").classList.toggle("hidden", myFindings.length > 0);
   list.innerHTML = "";
-  shown.forEach(f => list.appendChild(findingRow(f)));
+  shown.forEach((f, i) => {
+    const row = findingRow(f);
+    // Kademe yalnızca ilk ekranda anlamlı; yirminci satır zaten görünmüyor ve
+    // beklemesi listeyi hızlı değil yavaş gösterirdi.
+    row.style.setProperty("--i", Math.min(i, 12));
+    list.appendChild(row);
+  });
 
   // Süzme sonucu boş çıkabilir; bunu "hiç bulgun yok" ile karıştırmamak için
   // sayaç her zaman kaç kaydın kaç kayıttan süzüldüğünü söyler.
@@ -1045,11 +1102,14 @@ function columnChart(host, points, opts = {}) {
     svg.appendChild(hit);
 
     const h = p.value === 0 ? 0 : Math.max(3, (p.value / max) * plotH);
-    svg.appendChild(svgEl("rect", {
+    const bar = svgEl("rect", {
       x: i * slot + (slot - bw) / 2, y: H - PAD_B - h,
       width: bw, height: h, rx: 4,
       class: "bar" + (opts.tone ? " " + opts.tone : ""),
-    }));
+    });
+    // Soldan sağa kademe: grafik bir anda basılmak yerine çiziliyor.
+    bar.style.setProperty("--i", i);
+    svg.appendChild(bar);
 
     if (p.tick) {
       const t = svgEl("text", {
@@ -1115,7 +1175,7 @@ function renderSeverity(findings) {
     const n = findings.filter(f => (f.severity || "medium") === o.key).length;
     const seg = document.createElement("span");
     seg.className = o.cls;
-    seg.style.flex = total ? n : 0;
+    animateTo(seg, "flexGrow", String(total ? n : 0));
     // Doğrudan etiket, ancak sığdığında: dar bir dilimde rakam okunmaz.
     seg.textContent = total && n / total > 0.12 ? n : "";
     seg.title = `${o.label}: ${n}`;
@@ -1170,7 +1230,7 @@ function renderSlaBuckets(open) {
     const track = document.createElement("div");
     track.className = "b-track";
     const fill = document.createElement("i");
-    fill.style.width = (c.n / peak) * 100 + "%";
+    animateTo(fill, "width", (c.n / peak) * 100 + "%");
     track.appendChild(fill);
     const n = document.createElement("b");
     n.className = "b-n";
@@ -1198,13 +1258,13 @@ async function loadDash() {
   const overdue = open.filter(f => f.due_date && new Date(f.due_date) < today).length;
   const critical = open.filter(f => f.severity === "critical").length;
 
-  document.getElementById("kTotal").textContent = open.length;
+  countTo(document.getElementById("kTotal"), open.length);
   document.getElementById("kTotalSub").textContent = total
     ? `${critical} kritik · toplam ${total} bulgu`
     : "henüz bulgu yok";
-  document.getElementById("kRate").textContent = (total ? Math.round((closed / total) * 100) : 0) + "%";
+  countTo(document.getElementById("kRate"), total ? Math.round((closed / total) * 100) : 0, "%");
   document.getElementById("kRateSub").textContent = total ? `${closed}/${total} kapatıldı` : "—";
-  document.getElementById("kOverdue").textContent = overdue;
+  countTo(document.getElementById("kOverdue"), overdue);
   document.getElementById("kOverdueCard").classList.toggle("alert", overdue > 0);
 
   renderSeverity(open);
@@ -1224,7 +1284,7 @@ async function loadDash() {
   log.slice(0, 8).forEach(a => recent.appendChild(auditRow(a)));
 
   const week = points.slice(-7).reduce((s, p) => s + p.value, 0);
-  document.getElementById("kWeek").textContent = week;
+  countTo(document.getElementById("kWeek"), week);
   const busiest = points.reduce((a, b) => (b.value > a.value ? b : a), points[0]);
   document.getElementById("actNote").textContent = busiest && busiest.value
     ? `En yoğun gün: ${busiest.label}.`
@@ -1408,6 +1468,8 @@ function renderRisk() {
       );
       btn.textContent = n || "·";
       btn.disabled = !n;
+      // Sol üstten sağ alta doğru açılır — okuma yönü.
+      btn.style.setProperty("--i", si * AGE_BUCKETS.length + ai);
       btn.onclick = () => {
         riskCell = riskCell && riskCell.sev === si && riskCell.age === ai
           ? null                                  // aynı hücreye tekrar tıklamak seçimi kaldırır
@@ -1478,7 +1540,11 @@ function renderRiskList(open) {
   // Satırdaki denetimler loadFindings() çağırıyor, o da bu sayfa açıksa
   // matrisi yeniden çiziyor — kritikliği değişen bir bulgu artık başka bir
   // hücreye ait olabilir.
-  rows.forEach(f => list.appendChild(findingRow(f)));
+  rows.forEach((f, i) => {
+    const row = findingRow(f);
+    row.style.setProperty("--i", Math.min(i, 12));
+    list.appendChild(row);
+  });
   note.textContent = `${rows.length} bulgu · en eskisi ${ageOf(rows[0])} günlük`;
 }
 
@@ -1492,7 +1558,13 @@ function setupTabs() {
       btn.classList.add("active");
       const v = btn.dataset.view;
       Object.values(VIEWS).forEach(id => document.getElementById(id).classList.add("hidden"));
-      document.getElementById(VIEWS[v]).classList.remove("hidden");
+      const view = document.getElementById(VIEWS[v]);
+      view.classList.remove("hidden");
+      // Sınıfı önce kaldırıp bir kare sonra ekliyoruz: aynı sınıf duruyorken
+      // yeniden eklemek animasyonu baştan başlatmaz, sekme geçişi de ikinci
+      // seferde hiç görünmezdi.
+      view.classList.remove("view-enter");
+      requestAnimationFrame(() => view.classList.add("view-enter"));
       // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
       if (v === "dash") loadFindings().then(loadDash).catch(() => {});
       if (v === "risk") loadFindings().catch(() => {});
