@@ -11,7 +11,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import audit
+from app import ai, audit
 from app.auth import (
     callback_router,
     get_current_user,
@@ -20,7 +20,7 @@ from app.auth import (
     require_step_up,
     router as auth_router,
 )
-from app.config import SESSION_HTTPS_ONLY, SESSION_SECRET
+from app.config import AI_HOURLY_LIMIT, SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
 from app.importers import parse_nuclei, parse_sarif
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
@@ -31,6 +31,7 @@ from app.models import (
     SEVERITY_ORDER,
     SLA_DAYS,
     TEAM_RISK_OWNER,
+    AIAnalysis,
     Asset,
     AuditLog,
     Finding,
@@ -39,6 +40,8 @@ from app.models import (
     User,
 )
 from app.schemas import (
+    AIAnalysisResponse,
+    AIProviderResponse,
     AssetCreate,
     AssetResponse,
     AssigneeUpdate,
@@ -1229,6 +1232,202 @@ def run_monitor(
     db.commit()
 
     return {"checked": len(assets), "refused": refused, **totals}
+
+
+# --- AI analysis -------------------------------------------------------------
+#
+# Analyses per user per hour. The general rate limiter counts requests by
+# address; this counts inference by person, because the cost of the two is not
+# remotely the same and one held-down button should not spend an afternoon's
+# budget.
+_ai_calls: dict[int, deque] = defaultdict(deque)
+_AI_WINDOW = 3600
+
+
+def _ai_budget(user: User) -> None:
+    calls = _ai_calls[user.id]
+    now = time.time()
+
+    while calls and calls[0] <= now - _AI_WINDOW:
+        calls.popleft()
+
+    if len(calls) >= AI_HOURLY_LIMIT:
+        raise HTTPException(
+            status_code=429,
+            detail=f"Saatte en fazla {AI_HOURLY_LIMIT} analiz yapılabilir.",
+        )
+
+    calls.append(now)
+
+
+def _analysis_response(row: AIAnalysis) -> AIAnalysisResponse:
+    return AIAnalysisResponse(
+        finding_id=row.finding_id,
+        created_at=row.created_at,
+        provider=row.provider,
+        model=row.model,
+        code_sent=row.code_sent,
+        risk_score=float(row.risk_score or 0),
+        suggested_severity=row.suggested_severity,
+        suggested_sla_hours=row.suggested_sla_hours,
+        exploitability=row.exploitability,
+        confidence=row.confidence,
+        summary=row.summary or "",
+        # Stored as one text column and split back out. A child table for at
+        # most five bullet points would be a join to maintain forever.
+        impact=[line for line in (row.impact or "").split("\n") if line],
+        remediation=row.remediation or "",
+        developer_note=row.developer_note or "",
+        cwe=row.cwe or "",
+        owasp=row.owasp or "",
+    )
+
+
+@app.get("/ai/provider", response_model=AIProviderResponse)
+def ai_provider(user: User = Depends(get_current_user)):
+    """Which model this installation uses, if any.
+
+    Behind authentication: which model an organisation runs, and whether their
+    findings leave the network, is not something to tell an anonymous caller.
+    """
+    info = ai.provider_info()
+
+    if info is None:
+        return AIProviderResponse(
+            configured=False,
+            note="AI analizi bu kurulumda yapılandırılmamış.",
+        )
+
+    return AIProviderResponse(
+        configured=True,
+        key=info.key,
+        label=info.label,
+        model=info.model,
+        endpoint=info.endpoint,
+        external=info.external,
+        sends_code=info.sends_code,
+        note=(
+            "Bulgular ve kod bu dış servise gönderilir."
+            if info.external
+            else "Bulgular ve kod bu kurulumun ağından çıkmaz."
+        ),
+    )
+
+
+@app.post("/ai/test")
+def ai_test(user: User = Depends(require_role("admin"))):
+    """Ask the model to answer once, and report what happened.
+
+    A configuration check, not an analysis: it sends no finding. The endpoint
+    it talks to comes from configuration — nothing in this request names it.
+
+    Admin-only because it makes the server open an outbound connection on
+    demand. Reading which model is configured is open to any user; making the
+    installation reach out is not.
+    """
+    try:
+        return {"ok": True, "detail": ai.build_provider().ping()}
+    except ai.AIError as exc:
+        # 200 with ok:false. The request was handled correctly; it is the model
+        # that is unreachable, and a 5xx here would read as "SecureTask broke".
+        return {"ok": False, "detail": str(exc)}
+
+
+@app.get("/findings/{finding_id}/analysis", response_model=AIAnalysisResponse)
+def get_analysis(
+    finding_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The stored analysis, if one has been run.
+
+    Fetched on its own rather than travelling with every finding: it is only
+    wanted when someone opens the panel, and on the list it would read as part
+    of the finding.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+    row = (
+        db.query(AIAnalysis)
+        .filter(AIAnalysis.finding_id == finding.id)
+        .one_or_none()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Bu bulgu henüz analiz edilmedi.")
+
+    return _analysis_response(row)
+
+
+@app.post("/findings/{finding_id}/analyze", response_model=AIAnalysisResponse)
+def analyze_finding(
+    finding_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ask the model to read this finding.
+
+    Nothing about the finding changes. The result is stored beside it as a
+    suggestion, and every rating in it stays a suggestion until a person applies
+    one through the ordinary update endpoint, where it is audited like any other
+    edit. This is the rule the importers already follow: a source may add work
+    and argue the work is unfinished, but it may not overwrite a judgement.
+
+    If the model is unreachable or answers with something that is not an
+    analysis, the finding and its SLA are exactly as they were.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+    _ai_budget(user)
+
+    try:
+        result = ai.analyse(finding)
+    except ai.AINotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    except ai.AIError as exc:
+        # 502: this application is fine, the thing it asked is not. Nothing has
+        # been written, so the caller can simply try again.
+        raise HTTPException(status_code=502, detail=str(exc))
+
+    row = (
+        db.query(AIAnalysis)
+        .filter(AIAnalysis.finding_id == finding.id)
+        .one_or_none()
+    )
+
+    if row is None:
+        row = AIAnalysis(finding_id=finding.id)
+        db.add(row)
+
+    row.provider = result["provider"]
+    row.model = result["model"]
+    row.code_sent = result["code_sent"]
+    row.who_id = user.id
+    row.risk_score = result["risk_score"]
+    row.suggested_severity = result["suggested_severity"]
+    row.suggested_sla_hours = result["suggested_sla_hours"]
+    row.exploitability = result["exploitability"]
+    row.confidence = result["confidence"]
+    row.summary = result["summary"]
+    row.impact = "\n".join(result["impact"])
+    row.remediation = result["remediation"]
+    row.developer_note = result["developer_note"]
+    row.cwe = result["cwe"]
+    row.owasp = result["owasp"]
+    row.created_at = datetime.now(timezone.utc)
+
+    db.commit()
+    db.refresh(row)
+
+    # Logged because it is a disclosure as much as an action: it records that
+    # this finding — and possibly the code quoted with it — was sent to a named
+    # model at a known time, by a known person.
+    _record_audit(
+        db, user, "analyzed", finding.id,
+        f"{finding.title} · {result['provider']}/{result['model']} · "
+        f"öneri {result['suggested_severity']} · kod "
+        f"{'gönderildi' if result['code_sent'] else 'gönderilmedi'}",
+    )
+
+    return _analysis_response(row)
 
 
 @app.post("/risk/expire")

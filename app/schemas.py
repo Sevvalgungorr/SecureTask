@@ -120,6 +120,57 @@ class AssetResponse(AssetCreate):
     }
 
 
+class AIProviderResponse(BaseModel):
+    """What the interface may know about the model being used.
+
+    There is no field for the key, redacted or otherwise. A response that can
+    carry a credential is a credential in a screenshot, a bug report, a log.
+    """
+
+    configured: bool
+    key: str = ""
+    label: str = ""
+    model: str = ""
+    endpoint: str = ""
+    # Whether findings leave the network. Shown in as many words: nobody should
+    # have to read a config file to learn their vulnerability list is being
+    # posted to a third party.
+    external: bool = False
+    sends_code: bool = False
+    note: str = ""
+
+
+class AIAnalysisResponse(BaseModel):
+    """A model's reading of a finding. Every rating here is a suggestion.
+
+    Named `suggested_*` throughout because that is what they are: nothing in
+    this response has been applied to the finding, and applying one is a
+    separate, audited act by a person.
+    """
+
+    finding_id: int
+    created_at: datetime
+    provider: str
+    model: str
+    # Whether the quoted source was in the request — the difference between a
+    # judgement and a guess, and the record of what left the building.
+    code_sent: bool
+    risk_score: float
+    suggested_severity: Severity
+    suggested_sla_hours: int | None = None
+    exploitability: str
+    # How sure the model is. Asked for on purpose: three lines of context often
+    # cannot settle whether an input is reachable, and a confident answer to an
+    # unanswerable question is the failure mode worth seeing.
+    confidence: str
+    summary: str = ""
+    impact: list[str] = []
+    remediation: str = ""
+    developer_note: str = ""
+    cwe: str = ""
+    owasp: str = ""
+
+
 class AuditLogResponse(BaseModel):
     id: int
     created_at: datetime
