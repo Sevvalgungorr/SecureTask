@@ -50,7 +50,16 @@ def _jwt_with_issuer(issuer: str) -> str:
 # --- what the interface is told --------------------------------------------
 
 
-def test_only_configured_providers_are_offered(client):
+def test_only_configured_providers_are_offered(client, monkeypatch):
+    """The registry is what is offered — nothing appears without credentials.
+
+    The second provider is removed here rather than assumed absent. Written the
+    other way this passed only on a machine that had no Google credentials in
+    its environment, and started failing the moment one did: a test about the
+    application quietly reporting on the developer's `.env`.
+    """
+    monkeypatch.delitem(PROVIDERS, "google", raising=False)
+
     keys = [p["key"] for p in client.get("/auth/providers").json()]
 
     assert keys == ["openidx"]

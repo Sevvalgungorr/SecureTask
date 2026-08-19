@@ -435,7 +435,30 @@ def callback(request: Request, db: Session = Depends(get_db)):
     if id_token:
         request.session["id_token"] = id_token
 
-    # Hand the token to the browser front-end: stash it and go to the app page.
+    # Hand the browser the credential this application can actually verify.
+    #
+    # Every request is authorised by verifying a JWT against its issuer's JWKS,
+    # which needs a token that carries `iss` and a signature. Whether the access
+    # token is such a thing is up to the provider: OpenIDX issues a JWT, Google
+    # issues an opaque string (`ya29…`) that means nothing outside Google.
+    #
+    # Handing over an opaque token looked fine until a second provider was real.
+    # It has no `iss` to read, so it fell back to the default provider and was
+    # checked against the wrong keys — login succeeded, the account was created,
+    # and every request after it came back 401. The id_token is the one the
+    # standard guarantees to be a signed JWT naming its issuer, so that is what
+    # goes when the access token cannot be verified here.
+    bearer = access_token if _looks_like_jwt(access_token) else id_token
+
+    if not bearer:
+        # An opaque access token and no id_token: nothing here can be checked
+        # on later requests, and issuing a credential this application cannot
+        # verify would mean trusting whatever comes back holding it.
+        raise HTTPException(
+            status_code=502,
+            detail="Sağlayıcı doğrulanabilir bir token vermedi.",
+        )
+
     # (json.dumps safely quotes the token for embedding in the script.)
     #
     # This is the application's only inline script, and it stays inline on
@@ -446,7 +469,7 @@ def callback(request: Request, db: Session = Depends(get_db)):
     handoff = (
         '<!doctype html><meta charset="utf-8">'
         f'<script nonce="{nonce}">'
-        f"localStorage.setItem('securetask_token', {json.dumps(access_token)});"
+        f"localStorage.setItem('securetask_token', {json.dumps(bearer)});"
         "location.replace('/app');"
         "</script>Giriş yapılıyor…"
     )
