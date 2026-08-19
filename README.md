@@ -306,10 +306,12 @@ erişilebilir mi, erişilirse ne kaybedilir, ne değiştirilmeli — bunları s�
 curl -X POST http://localhost:8000/findings/12/analyze -H "Authorization: Bearer $TOKEN"
 ```
 
-> Buraya bir ekran görüntüsü **bilerek konmadı**: elimizde henüz bir model
-> çalışmıyor, ve gerçek bir modelin üretmediği bir analizi belge olarak koymak,
-> olmayan bir yeteneği varmış gibi göstermek olurdu. Model bağlandığında
-> buraya gerçek bir çıktı gelecek.
+![AI analizi](docs/images/ai-analysis.png)
+
+Yukarıdaki çıktı gerçektir: kendi makinesinde çalışan `qwen2.5:7b` üretti,
+CPU'da yaklaşık 50 saniyede. Uydurulmuş bir örnek değil — ve zaten iyi
+görünmüyor. "Modelin güveni: **düşük**" yazması bir kusur değil, aşağıda
+anlatılan tutarlılık kuralının çalışması.
 
 Sağlayıcı tek bir dikişin arkasında. Varsayılan **kendi sunucunda çalışan**
 model: OpenAI-uyumlu `/chat/completions` konuşulduğu için Ollama, vLLM ve
@@ -350,6 +352,33 @@ bilgisini ikinci kez sızdırmaktır. Gönderimden önce parola/token/anahtar de
 gösteren *değerler* maskelenir — değişkenin **adı kalır**, çünkü bulgu odur.
 Kodun hiç gönderilmemesi de bir ayar; her analiz kaydı kodun gidip gitmediğini
 yazar, böylece bir okuyucu modelin bakacak bir şeyi olup olmadığını bilir.
+
+#### Kendiyle çelişen cevap düzeltilmez, işaretlenir
+
+Şema, hangi skorun hangi kritiklikle gittiğini **sayıyla** söylüyor (`low` 0-3.9,
+`medium` 4-6.9, `high` 7-8.9, `critical` 9-10). Bir modelin bir şeyi 7.0 verip
+"orta" demesi, açıkça yazılmış tek sayısal talimatı tutturamaması demektir.
+
+İki değerden biri üzerine yazılmıyor. Hangisini kastettiğine karar vermek, tam
+olarak uygulamanın vermeye yetkili olmadığı yargı olurdu. Bunun yerine
+**modelin güveni `düşük`e çekiliyor** — bilinen şey bu: bu okuma, iddia
+ettiğinden daha az güvenilir. Arayüz onu kehribar renkte gösteriyor.
+
+Yukarıdaki ekran görüntüsündeki "düşük" tam olarak budur: model SQL
+enjeksiyonuna 7.0 verip "orta" dedi.
+
+#### Model seçimi bir yapılandırma satırı
+
+Ekran görüntüsündeki analiz `qwen2.5:7b` ile, GPU'suz bir makinede üretildi.
+Dürüst olmak gerekirse **iyi değil**: SQL enjeksiyonunu "orta" sayıyor ve OWASP
+kategorisini yanlış veriyor (A03 yerine A4). Şema alan açıklamaları biçim
+sorunlarını çözdü — `cwe` artık `CWE-89: Improper SQL` diye kesilmiş bir metin
+değil, `CWE-89` — ama bir 7B modelin muhakemesini büyütmüyor.
+
+Mimarinin değeri burada: daha iyi bir modele geçmek `.env`'de tek satır.
+`AI_LOCAL_BASE_URL` kurumdaki daha büyük bir modele çevrilebilir, ya da
+`AI_PROVIDER=anthropic` yapılır. Uygulamanın hiçbir yeri değişmez, çünkü model
+zaten bir görüş bildiriyor — karar vermiyor.
 
 #### Öneri, karar değil
 
@@ -444,7 +473,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 172 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 174 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -575,7 +604,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 172 test
+pytest                                      # 174 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```

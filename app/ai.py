@@ -44,26 +44,88 @@ ANALYSIS_SCHEMA = {
         "impact", "remediation", "developer_note", "suggested_sla_hours",
         "cwe", "owasp", "confidence",
     ],
+    # Every field carries a description. Not decoration: the runtimes pass the
+    # schema to the model, and a small model given a bare `"cwe": string` will
+    # write a sentence into it. Asked for "identifier only, e.g. CWE-89" it
+    # writes CWE-89. Storage caps cannot fix that — they truncate a wrong
+    # answer mid-word instead of getting a right one, which is how
+    # "CWE-89: Improper SQL" ended up in the first real run.
     "properties": {
-        "risk_score": {"type": "number", "minimum": 0, "maximum": 10},
-        "suggested_severity": {"enum": ["low", "medium", "high", "critical"]},
-        "exploitability": {"enum": ["low", "medium", "high"]},
-        "summary": {"type": "string", "maxLength": 600},
-        "impact": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 200}},
-        "remediation": {"type": "string", "maxLength": 900},
-        "developer_note": {"type": "string", "maxLength": 600},
-        "suggested_sla_hours": {"type": "integer", "minimum": 1, "maximum": 2160},
-        "cwe": {"type": "string", "maxLength": 20},
-        "owasp": {"type": "string", "maxLength": 60},
+        "risk_score": {
+            "type": "number", "minimum": 0, "maximum": 10,
+            "description": (
+                "Overall risk 0-10. Must agree with suggested_severity: "
+                "low 0-3.9, medium 4-6.9, high 7-8.9, critical 9-10."
+            ),
+        },
+        "suggested_severity": {
+            "enum": ["low", "medium", "high", "critical"],
+            "description": (
+                "Your own rating of this finding, which may differ from the "
+                "recorded one. Injection reaching a database, authentication "
+                "bypass and remote code execution are high or critical."
+            ),
+        },
+        "exploitability": {
+            "enum": ["low", "medium", "high"],
+            "description": "How hard it would be to actually reach and abuse this.",
+        },
+        "summary": {
+            "type": "string", "maxLength": 600,
+            "description": "Why this is dangerous, grounded in what the block shows.",
+        },
+        "impact": {
+            "type": "array", "maxItems": 5,
+            "items": {"type": "string", "maxLength": 200},
+            "description": "Concrete consequences, one short phrase each.",
+        },
+        "remediation": {
+            "type": "string", "maxLength": 900,
+            "description": "What to change, specific to this code.",
+        },
+        "developer_note": {
+            "type": "string", "maxLength": 600,
+            "description": "The same fix in plain terms for whoever will apply it.",
+        },
+        "suggested_sla_hours": {
+            "type": "integer", "minimum": 1, "maximum": 2160,
+            "description": (
+                "Hours to fix. Must match suggested_severity: critical 4-24, "
+                "high 24-336, medium 336-720, low 720-2160."
+            ),
+        },
+        "cwe": {
+            "type": "string", "maxLength": 20,
+            "description": "Identifier only, e.g. CWE-89. No title, no explanation.",
+        },
+        "owasp": {
+            "type": "string", "maxLength": 60,
+            "description": (
+                "OWASP Top 10 2021 category, e.g. 'A03: Injection'. Injection "
+                "flaws including SQL injection are A03, never A01 or A04."
+            ),
+        },
         # Asked for on purpose. A model given a rule name and three lines of
         # context often cannot tell whether the input is reachable, and a
         # confident answer to an unanswerable question is the failure mode that
         # matters here.
-        "confidence": {"enum": ["low", "medium", "high"]},
+        "confidence": {
+            "enum": ["low", "medium", "high"],
+            "description": (
+                "How sure you are, given only what the block shows. If the "
+                "code is absent, or nothing here settles whether the input is "
+                "reachable, this is low."
+            ),
+        },
     },
 }
 
 SEVERITIES = ("low", "medium", "high", "critical")
+
+# Which score belongs with which severity. Asked for in the schema, so a model
+# that disagrees with itself here has not followed the one instruction that was
+# spelled out numerically.
+SCORE_BANDS = {"low": (0, 3.9), "medium": (4, 6.9), "high": (7, 8.9), "critical": (9, 10)}
 
 # Longest each untrusted field may be when it reaches the prompt. A report is a
 # file someone uploads; without a cap it is also a way to spend the context
@@ -392,6 +454,11 @@ missing rather than assuming the worst case or the best. `suggested_severity` is
 your own reading; it may differ from the recorded severity, and saying so is the \
 point of asking you.
 
+Keep the answer internally consistent: the score, the severity and the fix \
+window all describe the same judgement, and a "low" rated 9/10 due in four \
+hours is not a reading anyone can act on. Follow each field's description \
+exactly — `cwe` is an identifier and nothing else.
+
 Answer only in the required schema."""
 
 
@@ -460,12 +527,30 @@ def validate(raw: dict) -> dict:
     exploitability = str(raw.get("exploitability", "")).strip().lower()
     confidence = str(raw.get("confidence", "")).strip().lower()
     impact = raw.get("impact")
+    score = _clamp(raw.get("risk_score"), 0, 10, 0.0)
+
+    if confidence not in ("low", "medium", "high"):
+        confidence = "low"
+
+    # An answer that contradicts itself is not corrected, it is marked. The
+    # score, the severity and the fix window all describe one judgement, and
+    # the schema says numerically which goes with which; a model rating
+    # something 7.0 and calling it "medium" has not held that together.
+    #
+    # Overwriting one of the two would mean the application deciding which half
+    # the model meant, which is exactly the judgement it is not entitled to
+    # make. Lowering the confidence says what is actually known: this reading
+    # is less reliable than it claims. The interface shows that in amber.
+    low, high = SCORE_BANDS[severity]
+
+    if not low <= score <= high:
+        confidence = "low"
 
     return {
-        "risk_score": _clamp(raw.get("risk_score"), 0, 10, 0.0),
+        "risk_score": score,
         "suggested_severity": severity,
         "exploitability": exploitability if exploitability in ("low", "medium", "high") else "medium",
-        "confidence": confidence if confidence in ("low", "medium", "high") else "low",
+        "confidence": confidence,
         "summary": str(raw.get("summary") or "")[:600],
         "impact": [str(item)[:200] for item in impact[:5]] if isinstance(impact, list) else [],
         "remediation": str(raw.get("remediation") or "")[:900],

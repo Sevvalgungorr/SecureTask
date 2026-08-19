@@ -285,6 +285,35 @@ def test_an_answer_that_is_not_an_analysis_is_refused(client, model):
     assert client.get(f"/findings/{finding_id}/analysis").status_code == 404
 
 
+def test_a_self_contradicting_answer_is_marked_not_corrected(model):
+    """Score, severity and fix window describe one judgement, and the schema
+    says numerically which goes with which. A model rating something 9.5 and
+    calling it "low" has not held that together.
+
+    Neither half is overwritten: choosing which one the model meant is the
+    judgement the application is not entitled to make. What is recorded is the
+    thing that is actually known — this reading is less reliable than it says.
+    """
+    result = ai.validate({**ANSWER, "risk_score": 9.5, "suggested_severity": "low",
+                          "confidence": "high"})
+
+    assert result["risk_score"] == 9.5          # kept
+    assert result["suggested_severity"] == "low"  # kept
+    assert result["confidence"] == "low"          # but no longer trusted
+
+
+def test_a_consistent_answer_keeps_its_confidence(model):
+    result = ai.validate({**ANSWER, "risk_score": 8.5, "suggested_severity": "critical",
+                          "confidence": "high"})
+
+    # 8.5 is the "high" band, not "critical" — still a contradiction.
+    assert result["confidence"] == "low"
+
+    result = ai.validate({**ANSWER, "risk_score": 9.5, "suggested_severity": "critical",
+                          "confidence": "high"})
+    assert result["confidence"] == "high"
+
+
 def test_out_of_range_numbers_are_clamped_not_trusted(model):
     result = ai.validate({**ANSWER, "risk_score": 9999, "suggested_sla_hours": -5})
 
