@@ -302,11 +302,14 @@ Bir tarayıcı, bir kuralın tetiklendiğini söyler. Bulduğu şeye gerçekten
 erişilebilir mi, erişilirse ne kaybedilir, ne değiştirilmeli — bunları söylemez.
 İnsanın sonraki soruları bunlar, ve modele sorulan da bunlar.
 
-![AI analizi](docs/images/ai-analysis.png)
-
 ```bash
 curl -X POST http://localhost:8000/findings/12/analyze -H "Authorization: Bearer $TOKEN"
 ```
+
+> Buraya bir ekran görüntüsü **bilerek konmadı**: elimizde henüz bir model
+> çalışmıyor, ve gerçek bir modelin üretmediği bir analizi belge olarak koymak,
+> olmayan bir yeteneği varmış gibi göstermek olurdu. Model bağlandığında
+> buraya gerçek bir çıktı gelecek.
 
 Sağlayıcı tek bir dikişin arkasında. Varsayılan **kendi sunucunda çalışan**
 model: OpenAI-uyumlu `/chat/completions` konuşulduğu için Ollama, vLLM ve
