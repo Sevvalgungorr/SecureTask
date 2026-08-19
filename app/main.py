@@ -1333,6 +1333,39 @@ def ai_test(user: User = Depends(require_role("admin"))):
         return {"ok": False, "detail": str(exc)}
 
 
+@app.get("/ai/analyses")
+def ai_analyses(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Which findings have been analysed, and how they scored.
+
+    Three fields, not the whole analysis. The list needs to show that a reading
+    exists and roughly what it says; the reasoning behind it is worth a request
+    of its own, and putting it on every row would send a page of prose per
+    finding to draw one chip.
+
+    One query rather than one per row: a list of forty findings should not be
+    forty requests.
+    """
+    rows = (
+        db.query(AIAnalysis)
+        .join(Finding, Finding.id == AIAnalysis.finding_id)
+        .filter(_visible_to(db, user))
+        .all()
+    )
+
+    return [
+        {
+            "finding_id": row.finding_id,
+            "risk_score": float(row.risk_score or 0),
+            "suggested_severity": row.suggested_severity,
+            "confidence": row.confidence,
+        }
+        for row in rows
+    ]
+
+
 @app.get("/findings/{finding_id}/analysis", response_model=AIAnalysisResponse)
 def get_analysis(
     finding_id: int,
