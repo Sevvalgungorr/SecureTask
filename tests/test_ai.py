@@ -376,3 +376,34 @@ def test_analyses_are_budgeted_per_person(client, model, monkeypatch):
     ]
 
     assert codes == [200, 200, 200, 429]
+
+
+# --- what the list is told ---------------------------------------------------
+
+
+def test_the_list_learns_which_findings_were_analysed(client, model):
+    """A row has to be able to say an analysis exists without opening it —
+    otherwise the feature is invisible until you already know it is there."""
+    client.login_as("alice")
+    analysed = client.post("/findings", json=_payload()).json()["id"]
+    client.post("/findings", json=_payload(title="dokunulmadı"))
+    client.post(f"/findings/{analysed}/analyze")
+
+    rows = client.get("/ai/analyses").json()
+
+    assert [r["finding_id"] for r in rows] == [analysed]
+    assert rows[0]["risk_score"] == 8.5
+    assert rows[0]["suggested_severity"] == "critical"
+    # Summary only: the reasoning is worth its own request, and sending a page
+    # of prose per row to draw one badge is not.
+    assert set(rows[0]) == {"finding_id", "risk_score", "suggested_severity", "confidence"}
+
+
+def test_the_summary_list_respects_who_may_see_what(client, model):
+    client.login_as("alice")
+    finding_id = client.post("/findings", json=_payload()).json()["id"]
+    client.post(f"/findings/{finding_id}/analyze")
+    client.logout()
+    client.login_as("mallory")
+
+    assert client.get("/ai/analyses").json() == []

@@ -212,6 +212,16 @@ const doneBar = (text, late) => barEl(late ? "done-late" : "done", 1, text, fals
 // olurdu.
 
 let aiProviderInfo = null;
+// {finding_id: {risk_score, suggested_severity, confidence}} — yalnızca özet.
+// Listenin göstermesi gereken şey bir okumanın var olduğu ve kabaca ne dediği;
+// gerekçesi kendi isteğini hak ediyor.
+let aiScores = {};
+
+async function loadAiScores() {
+  if (!aiProviderInfo || !aiProviderInfo.configured) { aiScores = {}; return; }
+  const rows = await api("/ai/analyses");
+  aiScores = Object.fromEntries(rows.map(r => [r.finding_id, r]));
+}
 
 function aiRow(label, value, cls) {
   const dt = document.createElement("dt");
@@ -359,8 +369,13 @@ async function analyzeFinding(f, rerun) {
 
   aiLoading("Model bulguyu okuyor…");
   try {
-    renderAnalysis(f, await api(`/findings/${f.id}/analyze`, { method: "POST" }));
+    const a = await api(`/findings/${f.id}/analyze`, { method: "POST" });
+    renderAnalysis(f, a);
     addRerun(f);
+    // Satırdaki rozet, panel kapanmadan güncellensin.
+    aiScores[f.id] = { finding_id: f.id, risk_score: a.risk_score,
+                       suggested_severity: a.suggested_severity, confidence: a.confidence };
+    renderMyList();
   } catch (e) {
     const body = document.getElementById("aiBody");
     body.innerHTML = "";
@@ -665,11 +680,20 @@ function findingRow(f) {
   // basıldığında "yapılandırılmamış" diyen bir düğme, olmayan bir düğmeden
   // daha kötüdür.
   if (aiProviderInfo && aiProviderInfo.configured) {
+    const done = aiScores[f.id];
     const ai = document.createElement("button");
-    ai.className = "icon-btn ai-btn";
+    // Etiketli düğme, çıplak ikon değil. Düzenle/sil ikonlarının arasında bir
+    // sembol, ne olduğu bilinmeden bulunamıyor.
+    ai.className = "btn ghost sm ai-btn" + (done ? " analyzed" : "");
     ai.type = "button";
-    ai.title = "AI ile analiz et";
-    ai.textContent = "✦";
+    ai.title = done
+      ? `AI analizi: ${done.risk_score.toFixed(1)}/10 — açmak için tıkla`
+      : "Bu bulguyu AI ile analiz et";
+    const mark = document.createElement("span");
+    mark.className = "ai-mark";
+    mark.textContent = "✦";
+    ai.appendChild(mark);
+    ai.appendChild(document.createTextNode(done ? done.risk_score.toFixed(1) : "AI"));
     ai.onclick = () => analyzeFinding(f, false);
     actions.appendChild(ai);
   }
@@ -815,6 +839,9 @@ function refreshSourceOptions() {
 
 async function loadFindings() {
   myFindings = await api("/findings");
+  // Skorlar bulgularla birlikte: satır, analiz edilmiş olduğunu kendisi
+  // söylemeli — tıklanana kadar gizli kalmamalı.
+  await loadAiScores().catch(() => { aiScores = {}; });
   setStats(myFindings);
   refreshSourceOptions();
   renderMyList();
