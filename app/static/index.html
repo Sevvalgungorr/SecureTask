@@ -339,6 +339,15 @@
         </div>
       </div>
       <div class="admin-block">
+        <div class="list-head">
+          <h2>AI sağlayıcısı</h2>
+          <button class="btn ghost sm hidden" id="aiTestBtn" type="button">Bağlantıyı test et</button>
+        </div>
+        <dl class="sec-kv" id="aiProvider"></dl>
+        <p class="chart-note" id="aiProviderNote"></p>
+      </div>
+
+      <div class="admin-block">
         <div class="list-head"><h2>Güvenlik Durumu</h2><span class="badge">bu hesabı koruyan</span></div>
         <ul class="sec-checks">
           <li><span class="ck">✓</span> OpenID Connect ile kimlik doğrulama (SSO + PKCE)</li>
@@ -374,6 +383,21 @@
     </div>
   </section>
 </main>
+
+<!-- AI analiz paneli. Sağdan açılır: bulgu listesi yerinde kalsın, panel de
+     onun yerine geçmek yerine yanında dursun. Bu bir öneri, bulgunun kendisi
+     değil — kapatınca liste olduğu gibi kalır. -->
+<div class="drawer-veil hidden" id="aiVeil"></div>
+<aside class="drawer hidden" id="aiDrawer" aria-labelledby="aiDrawerTitle" role="dialog" aria-modal="true">
+  <div class="drawer-head">
+    <div>
+      <h2 id="aiDrawerTitle">AI güvenlik analizi</h2>
+      <p class="drawer-sub" id="aiDrawerSub"></p>
+    </div>
+    <button class="icon-btn" id="aiClose" type="button" title="Kapat" aria-label="Kapat">✕</button>
+  </div>
+  <div class="drawer-body" id="aiBody"></div>
+</aside>
 
 <div class="toast" id="toast"></div>
 

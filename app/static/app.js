@@ -200,6 +200,187 @@ function barEl(kind, pct, text, icon) {
 
 const doneBar = (text, late) => barEl(late ? "done-late" : "done", 1, text, false);
 
+// --- AI analiz paneli -------------------------------------------------------
+//
+// Buradaki her değer bir *öneri*. Bulguya hiçbiri yazılmıyor; kritikliği
+// uygulamak ayrı bir tıklama ve mevcut denetimli güncelleme yolundan geçiyor,
+// böylece günlüğe "AI önerdi, sevval uyguladı" diye düşüyor.
+//
+// Modelin döndürdüğü her metin textContent ile basılıyor. Model, güvenilmeyen
+// girdiyi (yüklenmiş bir tarama raporunu) okuyor; çıktısı da güvenilmeyen veri
+// sayılır. innerHTML olsaydı zincirin sonu bu uygulamada script çalıştırmak
+// olurdu.
+
+let aiProviderInfo = null;
+
+function aiRow(label, value, cls) {
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  if (cls) dd.className = cls;
+  return [dt, dd];
+}
+
+function aiSection(title, build) {
+  const box = document.createElement("div");
+  box.className = "ai-sec";
+  const h = document.createElement("h3");
+  h.textContent = title;
+  box.appendChild(h);
+  build(box);
+  return box;
+}
+
+function closeAiDrawer() {
+  document.getElementById("aiDrawer").classList.add("hidden");
+  document.getElementById("aiVeil").classList.add("hidden");
+}
+
+function openAiDrawer(f) {
+  document.getElementById("aiDrawerSub").textContent = f.title;
+  document.getElementById("aiDrawer").classList.remove("hidden");
+  document.getElementById("aiVeil").classList.remove("hidden");
+  document.getElementById("aiClose").focus();
+}
+
+function aiLoading(msg) {
+  const body = document.getElementById("aiBody");
+  body.innerHTML = "";
+  const p = document.createElement("p");
+  p.className = "ai-wait";
+  p.textContent = msg;
+  body.appendChild(p);
+}
+
+function renderAnalysis(f, a) {
+  const body = document.getElementById("aiBody");
+  body.innerHTML = "";
+
+  // Skor ve kritiklik en üstte, ama "önerilen" kelimesiyle — bu satırın
+  // bulgunun kendi kritikliği sanılmaması gerekiyor.
+  const head = document.createElement("div");
+  head.className = "ai-score band-" + (a.risk_score >= 9 ? 3 : a.risk_score >= 7 ? 2 : a.risk_score >= 4 ? 1 : 0);
+  const num = document.createElement("b");
+  num.textContent = a.risk_score.toFixed(1);
+  const outOf = document.createElement("span");
+  outOf.textContent = "/10";
+  const sev = document.createElement("span");
+  sev.className = "ai-sev sev sev-" + a.suggested_severity;
+  sev.textContent = SEV_LABEL[a.suggested_severity] || a.suggested_severity;
+  head.append(num, outOf, sev);
+  body.appendChild(head);
+
+  const facts = document.createElement("dl");
+  facts.className = "sec-kv ai-facts";
+  const TR = { low: "düşük", medium: "orta", high: "yüksek" };
+  facts.append(
+    ...aiRow("Sömürülebilirlik", TR[a.exploitability] || a.exploitability),
+    // Modelin ne kadar emin olduğu ayrı bir satır: üç satır bağlamla girdinin
+    // erişilebilir olup olmadığı çoğu zaman anlaşılmaz, ve cevaplanamayan bir
+    // soruya verilen kendinden emin cevap burada asıl tehlikeli olan şey.
+    ...aiRow("Modelin güveni", TR[a.confidence] || a.confidence,
+             a.confidence === "low" ? "warn-text" : ""),
+    ...aiRow("Önerilen süre", a.suggested_sla_hours + " saat"),
+  );
+  if (a.cwe) facts.append(...aiRow("CWE", a.cwe));
+  if (a.owasp) facts.append(...aiRow("OWASP", a.owasp));
+  body.appendChild(facts);
+
+  if (a.summary) body.appendChild(aiSection("Neden önemli", box => {
+    const p = document.createElement("p");
+    p.textContent = a.summary;
+    box.appendChild(p);
+  }));
+
+  if (a.impact.length) body.appendChild(aiSection("Olası etki", box => {
+    const ul = document.createElement("ul");
+    a.impact.forEach(line => {
+      const li = document.createElement("li");
+      li.textContent = line;
+      ul.appendChild(li);
+    });
+    box.appendChild(ul);
+  }));
+
+  if (a.remediation) body.appendChild(aiSection("Önerilen çözüm", box => {
+    const p = document.createElement("p");
+    p.textContent = a.remediation;
+    box.appendChild(p);
+  }));
+
+  if (a.developer_note) body.appendChild(aiSection("Geliştiriciye", box => {
+    const p = document.createElement("p");
+    p.textContent = a.developer_note;
+    box.appendChild(p);
+  }));
+
+  // Öneriyi uygulamak: ayrı bir eylem, mevcut PUT'tan geçer, denetim
+  // günlüğüne normal bir düzenleme gibi düşer.
+  if (a.suggested_severity !== f.severity && !isClosed(f)) {
+    const apply = document.createElement("button");
+    apply.className = "btn sm ai-apply";
+    apply.type = "button";
+    apply.textContent =
+      `Kritikliği ${SEV_LABEL[a.suggested_severity]} yap`;
+    apply.onclick = async () => {
+      apply.disabled = true;
+      try {
+        await saveFinding({ ...f, severity: a.suggested_severity, due_date: null });
+        toast("Kritiklik güncellendi — denetim günlüğüne yazıldı");
+        closeAiDrawer();
+        loadFindings();
+      } catch (e) { toast(e.message); apply.disabled = false; }
+    };
+    body.appendChild(apply);
+  }
+
+  const foot = document.createElement("p");
+  foot.className = "ai-foot";
+  foot.textContent =
+    `${a.provider}/${a.model} · ${fmtDate(a.created_at.slice(0, 10))}`
+    + ` · kod ${a.code_sent ? "gönderildi" : "gönderilmedi"}`
+    + " · bunlar öneridir, bulguya uygulanmadı";
+  body.appendChild(foot);
+}
+
+async function analyzeFinding(f, rerun) {
+  openAiDrawer(f);
+
+  if (!rerun) {
+    // Önce saklanmış analiz: her açılışta modeli yeniden çağırmak hem para
+    // hem zaman harcar, hem de aynı bulgu için farklı cevaplar üretir.
+    try {
+      renderAnalysis(f, await api(`/findings/${f.id}/analysis`));
+      addRerun(f);
+      return;
+    } catch (e) { /* henüz analiz edilmemiş */ }
+  }
+
+  aiLoading("Model bulguyu okuyor…");
+  try {
+    renderAnalysis(f, await api(`/findings/${f.id}/analyze`, { method: "POST" }));
+    addRerun(f);
+  } catch (e) {
+    const body = document.getElementById("aiBody");
+    body.innerHTML = "";
+    const p = document.createElement("p");
+    p.className = "ai-error";
+    // Analiz başarısız oldu; bulgu ve SLA'sı olduğu gibi duruyor.
+    p.textContent = e.message;
+    body.appendChild(p);
+  }
+}
+
+function addRerun(f) {
+  const again = document.createElement("button");
+  again.className = "btn ghost sm ai-again";
+  again.type = "button";
+  again.textContent = "Yeniden analiz et";
+  again.onclick = () => analyzeFinding(f, true);
+  document.getElementById("aiBody").appendChild(again);
+}
+
 function memberName(teamId, userId) {
   const team = teamById(teamId);
   const member = team && team.members.find(m => m.user_id === userId);
@@ -480,6 +661,18 @@ function findingRow(f) {
   const actions = document.createElement("div");
   actions.className = "actions";
   if (f.team_id) actions.appendChild(assigneeSelect(f));
+  // Yalnızca sağlayıcı yapılandırılmışsa. Yoksa düğme hiç görünmez —
+  // basıldığında "yapılandırılmamış" diyen bir düğme, olmayan bir düğmeden
+  // daha kötüdür.
+  if (aiProviderInfo && aiProviderInfo.configured) {
+    const ai = document.createElement("button");
+    ai.className = "icon-btn ai-btn";
+    ai.type = "button";
+    ai.title = "AI ile analiz et";
+    ai.textContent = "✦";
+    ai.onclick = () => analyzeFinding(f, false);
+    actions.appendChild(ai);
+  }
   const edit = document.createElement("button");
   edit.className = "icon-btn"; edit.title = "Düzenle";
   edit.innerHTML = PENCIL; edit.onclick = () => startEdit(li, f);
@@ -1550,6 +1743,53 @@ function renderRiskList(open) {
 
 document.getElementById("riskClear").onclick = () => { riskCell = null; renderRisk(); };
 
+document.getElementById("aiClose").onclick = closeAiDrawer;
+document.getElementById("aiVeil").onclick = closeAiDrawer;
+addEventListener("keydown", e => { if (e.key === "Escape") closeAiDrawer(); });
+
+// Güvenlik sekmesindeki sağlayıcı bölümü. Uç nokta ve model *gösterilir*,
+// yazılamaz: kullanıcının girdiği bir adrese sunucunun — üstelik API anahtarı
+// taşıyarak — istek atması, bu uygulamanın izlemede zaten reddettiği SSRF'in
+// ta kendisi olurdu. Değer .env'den gelir.
+async function loadAiProvider() {
+  const kv = document.getElementById("aiProvider");
+  const note = document.getElementById("aiProviderNote");
+  const testBtn = document.getElementById("aiTestBtn");
+  kv.innerHTML = "";
+
+  const p = await api("/ai/provider");
+  aiProviderInfo = p;
+
+  if (!p.configured) {
+    note.textContent = p.note + " Kurulum: .env içinde AI_PROVIDER.";
+    testBtn.classList.add("hidden");
+    return;
+  }
+
+  kv.append(
+    ...aiRow("Sağlayıcı", p.label),
+    ...aiRow("Model", p.model),
+    ...aiRow("Uç nokta", p.endpoint),
+    // Bulguların ağdan çıkıp çıkmadığı, bir ayar dosyası okumadan
+    // görülebilmesi gereken bir şey.
+    ...aiRow("Veri", p.external ? "dış servise gönderiliyor" : "ağdan çıkmıyor",
+             p.external ? "warn-text" : ""),
+    ...aiRow("Kod parçası", p.sends_code ? "gönderiliyor (maskelenerek)" : "gönderilmiyor"),
+  );
+  note.textContent = p.note
+    + " Uç nokta ve model yapılandırmadan gelir; arayüzden değiştirilemez.";
+  testBtn.classList.toggle("hidden", !(currentUser?.roles || []).includes("admin"));
+}
+
+document.getElementById("aiTestBtn").onclick = async (e) => {
+  e.target.disabled = true;
+  try {
+    const r = await api("/ai/test", { method: "POST" });
+    toast(r.ok ? r.detail : "Bağlantı yok — " + r.detail);
+  } catch (err) { toast(err.message); }
+  e.target.disabled = false;
+};
+
 const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
@@ -1572,7 +1812,7 @@ function setupTabs() {
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
-      if (v === "security") loadSecurity().catch(() => {});
+      if (v === "security") loadSecurity().then(loadAiProvider).catch(() => {});
     };
   });
 }
@@ -1643,6 +1883,10 @@ async function render() {
     // Before the findings: a row cannot say which team it belongs to, or who
     // may accept its risk, until we know which teams this person is in.
     await loadTeams();
+    // Bulgulardan önce: bir satır, sağlayıcı yapılandırılmamışsa analiz
+    // düğmesini hiç göstermemeli. Başarısız olması bir engel değil — o zaman
+    // düğme çıkmaz, geri kalan her şey çalışır.
+    await loadAiProvider().catch(() => {});
     await loadFindings();
     await loadDash();
   } catch (e) {

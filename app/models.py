@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    Numeric,
     String,
     UniqueConstraint,
     event,
@@ -198,6 +199,62 @@ def _stamp_closed_at(finding, new, old, initiator):
             finding.closed_at = datetime.now(timezone.utc)
     else:
         finding.closed_at = None
+
+
+class AIAnalysis(Base):
+    """What a model said about one finding, the last time it was asked.
+
+    A separate table rather than columns on the finding, for one reason that
+    matters more than tidiness: these fields are an *opinion about* the row, not
+    part of it. Sitting on the finding they would be read as the finding's own
+    values, and the first thing someone would do is sort by `risk_score` as
+    though the application had rated anything. Here, the suggestion has to be
+    fetched deliberately and applied deliberately.
+
+    One row per finding — the current reading, not a history. Re-analysing
+    replaces it; what was applied from it is in the audit log, which is the
+    record meant to be read back.
+    """
+
+    __tablename__ = "ai_analyses"
+    __table_args__ = (
+        UniqueConstraint("finding_id", name="uq_ai_analyses_finding"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    finding_id = Column(
+        Integer,
+        ForeignKey("findings.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    # Which model said it, and where it ran. An analysis without provenance is
+    # an anonymous opinion, and six months later nobody can tell whether it came
+    # from a model that had the code in front of it or one guessing at a title.
+    provider = Column(String(30), nullable=False, server_default="")
+    model = Column(String(120), nullable=False, server_default="")
+    # Whether the quoted source was part of the request. This is the difference
+    # between a judgement and a guess, and it is also the disclosure record: it
+    # says whether that code left the building.
+    code_sent = Column(Boolean, nullable=False, server_default="false")
+    who_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+
+    # The model's reading. `suggested_*` are named for what they are: nothing
+    # here is ever copied onto the finding without a person doing it.
+    risk_score = Column(Numeric(4, 1), nullable=False, server_default="0")
+    suggested_severity = Column(String(10), nullable=False, server_default="medium")
+    suggested_sla_hours = Column(Integer)
+    exploitability = Column(String(10), nullable=False, server_default="medium")
+    confidence = Column(String(10), nullable=False, server_default="low")
+    summary = Column(String(1000))
+    impact = Column(String(1200))
+    remediation = Column(String(1200))
+    developer_note = Column(String(1000))
+    cwe = Column(String(20), nullable=False, server_default="")
+    owasp = Column(String(60), nullable=False, server_default="")
 
 
 class Asset(Base):

@@ -104,6 +104,50 @@ MONITOR_ALLOW_PRIVATE = os.getenv("MONITOR_ALLOW_PRIVATE", "false").lower() == "
 # finding, not a reason to hold the request open.
 MONITOR_TIMEOUT_SECONDS = float(os.getenv("MONITOR_TIMEOUT_SECONDS", "8"))
 
+# --- AI analysis -------------------------------------------------------------
+#
+# A model reads a finding and says how exploitable it looks, what it would cost,
+# and how to fix it. Three decisions are baked in here rather than left to the
+# caller, and each one is a refusal:
+#
+# 1. The endpoint comes from this file, never from a request. A backend that
+#    POSTs to a URL the user typed — carrying an API key — is the same SSRF this
+#    application already refuses for monitoring, with a credential attached. The
+#    interface may display and test the endpoint; it may not set it.
+# 2. A self-hosted model is the default. Findings describe what is broken and
+#    where, and the code quoted with them can contain the very secret a rule
+#    flagged. That is not data to hand to a third party by accident — it has to
+#    be a decision.
+# 3. Nothing is configured by default. With no provider set the feature is
+#    absent rather than broken, and no analysis button appears.
+AI_PROVIDER = os.getenv("AI_PROVIDER", "").strip().lower()
+
+# OpenAI-compatible chat completions. Ollama, vLLM and llama.cpp all speak it,
+# so "self-hosted" is one setting rather than one integration per runtime.
+AI_LOCAL_BASE_URL = os.getenv("AI_LOCAL_BASE_URL", "http://localhost:11434/v1")
+AI_LOCAL_MODEL = os.getenv("AI_LOCAL_MODEL", "llama3.1")
+# Sent as a bearer token when the local runtime wants one (vLLM often does).
+AI_LOCAL_API_KEY = os.getenv("AI_LOCAL_API_KEY", "")
+
+ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
+ANTHROPIC_BASE_URL = os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com")
+ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-5")
+
+# Whether the quoted source may be sent with the finding. Without it the model
+# is grading a rule name and its answer is worth about as much; with it, the
+# request carries someone's source code. Redaction runs either way — this only
+# decides whether the code is in the request at all.
+AI_SEND_CODE = os.getenv("AI_SEND_CODE", "true").lower() != "false"
+
+# An analysis is one request to one model. Long enough for a slow local model to
+# think, short enough that a hung endpoint does not hold a worker open.
+AI_TIMEOUT_SECONDS = float(os.getenv("AI_TIMEOUT_SECONDS", "60"))
+
+# Analyses per user per hour. Not abuse protection so much as bill protection:
+# an authenticated user should not be able to spend an afternoon's inference
+# budget by holding down a button.
+AI_HOURLY_LIMIT = int(os.getenv("AI_HOURLY_LIMIT", "40"))
+
 # --- The providers this installation accepts -------------------------------
 
 OPENIDX = Provider(
