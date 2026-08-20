@@ -2168,7 +2168,7 @@ function renderPriorities(rows) {
     const { a, f } = r;
     const card = document.createElement("button");
     card.type = "button";
-    card.className = "prio";
+    card.className = "prio" + (i === 0 ? " top" : "");
     card.title = "AI analizini aç";
 
     const rank = document.createElement("span");
@@ -2184,15 +2184,22 @@ function renderPriorities(rows) {
 
     const chips = document.createElement("div");
     chips.className = "prio-chips";
-    const conf = document.createElement("span");
-    conf.className = "conf c-" + a.confidence;
-    conf.textContent = CONF_LABEL[a.confidence] || a.confidence;
-    chips.appendChild(conf);
+    if (CONF_LABEL[a.confidence]) {
+      const conf = document.createElement("span");
+      conf.className = "conf c-" + a.confidence;
+      conf.textContent = CONF_LABEL[a.confidence];
+      chips.appendChild(conf);
+    }
 
-    const expl = document.createElement("span");
-    expl.className = "prio-meta";
-    expl.textContent = `sömürülebilirlik ${EXPL_LABEL[a.exploitability] || a.exploitability}`;
-    chips.appendChild(expl);
+    // Değer yoksa alan hiç çizilmiyor. "undefined" yazmak bir yana, uydurma
+    // bir varsayılan koymak daha kötü olurdu: sömürülebilirlik modelin
+    // söylediği bir şey, biz dolduramayız.
+    if (EXPL_LABEL[a.exploitability]) {
+      const expl = document.createElement("span");
+      expl.className = "prio-meta";
+      expl.textContent = `sömürülebilirlik ${EXPL_LABEL[a.exploitability]}`;
+      chips.appendChild(expl);
+    }
 
     if (a.suggested_sla_hours) {
       const sla = document.createElement("span");
