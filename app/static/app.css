@@ -32,6 +32,10 @@
        the only place these hues appear. */
     --sla-warm: #f59e0b;
     --sla-hot: #f97316;
+    /* Parıltının altını: bir ölçüm değil, bir kimlik işareti. Yalnızca AI
+       simgesinin kendisinde görünür — bir çubuğa ya da rozete asla girmez, ki
+       yukarıdaki zaman rampasıyla ("geç kalmış") karışmasın. */
+    --ai-spark: #eab308;
     --sh-sm: 0 1px 2px rgba(24,20,48,.05);
     --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
     --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
@@ -64,6 +68,7 @@
       /* Lifted for the dark surface; the amber -> orange direction is kept. */
       --sla-warm: #fbbf24;
       --sla-hot: #fb923c;
+      --ai-spark: #facc15;
       --sh-sm: 0 1px 2px rgba(0,0,0,.4);
       --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
       --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
@@ -391,7 +396,7 @@
     padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--line-2);
   }
   .drawer-head h2 { margin: 0; font-size: .95rem; display: flex; align-items: center; gap: .4rem; }
-  .drawer-head h2 .ai-mark { display: inline-flex; color: var(--accent); }
+  .drawer-head h2 .ai-mark { display: inline-flex; color: var(--ai-spark); }
   .drawer-head h2 .ai-mark svg { width: 16px; height: 16px; display: block; }
   .drawer-sub { margin: .25rem 0 0; font-size: .8rem; color: var(--muted); }
   .drawer-body { padding: 1.1rem 1.2rem 2rem; overflow-y: auto; }
@@ -424,17 +429,24 @@
   }
   /* Analiz düğmesi. Etiketli ve vurgu renginde: bir başlık özelliği,
      düzenle/sil ikonlarının arasında çıplak bir sembol olarak bulunamıyor. */
-  .ai-btn {
+  /* `.btn.ai-btn`, yalnızca `.ai-btn` değil: yukarıdaki `.btn.ghost` iki
+     sınıflı ve rengi `--muted`e çekiyor. Tek sınıflı bir kural onu yenemiyor,
+     düğme de gri kalıyordu — vurgu rengi hiç görünmüyordu. */
+  .btn.ai-btn {
     display: inline-flex; align-items: center; gap: .3rem; flex-shrink: 0;
-    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
     font-variant-numeric: tabular-nums;
   }
-  .ai-btn .ai-mark { display: inline-flex; }
-  .ai-btn .ai-mark svg { width: 15px; height: 15px; display: block; }
-  .ai-btn:hover { background: var(--accent-soft); }
+  .btn.ai-btn .ai-mark { display: inline-flex; color: var(--ai-spark); }
+  .btn.ai-btn .ai-mark svg { width: 15px; height: 15px; display: block; }
+  /* Hover'ı da aynı sebeple: `.btn.ghost:hover` rengi `--ink`e çeviriyor. */
+  .btn.ai-btn:hover { background: var(--accent-soft); color: var(--accent); }
   /* Analiz edilmiş satır skorunu taşıyor: listede hangi bulguya bakıldığı,
      tıklamadan görünüyor. */
-  .ai-btn.analyzed { background: var(--accent-soft); font-weight: 700; }
+  .btn.ai-btn.analyzed {
+    background: var(--accent-soft); font-weight: 800;
+    border-color: color-mix(in srgb, var(--accent) 55%, var(--line));
+  }
 
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
