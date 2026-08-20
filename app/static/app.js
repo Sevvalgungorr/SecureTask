@@ -686,9 +686,10 @@ function findingRow(f) {
   if (aiProviderInfo && aiProviderInfo.configured) {
     const done = aiScores[f.id];
     const ai = document.createElement("button");
-    // Etiketli düğme, çıplak ikon değil. Düzenle/sil ikonlarının arasında bir
-    // sembol, ne olduğu bilinmeden bulunamıyor.
-    ai.className = "btn ghost sm ai-btn" + (done ? " analyzed" : "");
+    // Etiketli bir hap düğme, çıplak ikon değil. Düzenle/sil ikonlarının
+    // arasında bir sembol, ne olduğu bilinmeden bulunamıyor — ama başlıktan
+    // da baskın olmamalı: bu satırın konusu bulgunun kendisi.
+    ai.className = "btn ai-btn" + (done ? " analyzed" : "");
     ai.type = "button";
     ai.title = done
       ? `AI analizi: ${done.risk_score.toFixed(1)}/10 — açmak için tıkla`
@@ -697,7 +698,13 @@ function findingRow(f) {
     mark.className = "ai-mark";
     mark.innerHTML = SPARK;              // static icon markup only
     ai.appendChild(mark);
-    ai.appendChild(document.createTextNode(done ? done.risk_score.toFixed(1) : "AI"));
+    ai.appendChild(document.createTextNode("AI"));
+    // Dar ekranda gizlenen kısım. "AI" ve parıltı her zaman kalıyor, çünkü
+    // düğmenin ne olduğunu söyleyen onlar; sıfatı ve skoru yer bulunca geliyor.
+    const extra = document.createElement("span");
+    extra.className = "ai-word";
+    extra.textContent = done ? ` · ${done.risk_score.toFixed(1)}` : " Analiz";
+    ai.appendChild(extra);
     ai.onclick = () => analyzeFinding(f, false);
     actions.appendChild(ai);
   }
