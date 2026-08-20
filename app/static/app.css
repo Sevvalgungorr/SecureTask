@@ -390,7 +390,9 @@
     display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem;
     padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--line-2);
   }
-  .drawer-head h2 { margin: 0; font-size: .95rem; }
+  .drawer-head h2 { margin: 0; font-size: .95rem; display: flex; align-items: center; gap: .4rem; }
+  .drawer-head h2 .ai-mark { display: inline-flex; color: var(--accent); }
+  .drawer-head h2 .ai-mark svg { width: 16px; height: 16px; display: block; }
   .drawer-sub { margin: .25rem 0 0; font-size: .8rem; color: var(--muted); }
   .drawer-body { padding: 1.1rem 1.2rem 2rem; overflow-y: auto; }
 
@@ -427,7 +429,8 @@
     color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
     font-variant-numeric: tabular-nums;
   }
-  .ai-btn .ai-mark { font-size: .9rem; line-height: 1; }
+  .ai-btn .ai-mark { display: inline-flex; }
+  .ai-btn .ai-mark svg { width: 15px; height: 15px; display: block; }
   .ai-btn:hover { background: var(--accent-soft); }
   /* Analiz edilmiş satır skorunu taşıyor: listede hangi bulguya bakıldığı,
      tıklamadan görünüyor. */

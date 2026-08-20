@@ -102,6 +102,10 @@ async function logout() {
 const PENCIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/></svg>';
 const TRASH = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m2 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>';
 const CAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4M8 2v4M3 10h18"/></svg>';
+// Parıltı: büyük bir dört köşeli yıldız ve yanında küçüğü. Diğerlerinin
+// aksine dolu çiziliyor — ince çizgili bir yıldız bu boyutta bulanıklaşıyor.
+// currentColor sayesinde düğmenin vurgu rengini alıyor.
+const SPARK = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 2.5l1.7 4.8 4.8 1.7-4.8 1.7L11 15.5 9.3 10.7 4.5 9l4.8-1.7z"/><path d="M18 14l.85 2.4 2.4.85-2.4.85L18 20.5l-.85-2.4-2.4-.85 2.4-.85z"/></svg>';
 const SEV_LABEL = { low: "Düşük", medium: "Orta", high: "Yüksek", critical: "Kritik" };
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
 const STATUS_LABEL = { open: "Açık", triaged: "Triyaj", fixed: "Düzeltildi", accepted_risk: "Risk kabul" };
@@ -691,7 +695,7 @@ function findingRow(f) {
       : "Bu bulguyu AI ile analiz et";
     const mark = document.createElement("span");
     mark.className = "ai-mark";
-    mark.textContent = "✦";
+    mark.innerHTML = SPARK;              // static icon markup only
     ai.appendChild(mark);
     ai.appendChild(document.createTextNode(done ? done.risk_score.toFixed(1) : "AI"));
     ai.onclick = () => analyzeFinding(f, false);
@@ -1770,6 +1774,7 @@ function renderRiskList(open) {
 
 document.getElementById("riskClear").onclick = () => { riskCell = null; renderRisk(); };
 
+document.getElementById("aiTitleMark").innerHTML = SPARK;   // static icon markup
 document.getElementById("aiClose").onclick = closeAiDrawer;
 document.getElementById("aiVeil").onclick = closeAiDrawer;
 addEventListener("keydown", e => { if (e.key === "Escape") closeAiDrawer(); });
