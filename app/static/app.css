@@ -514,6 +514,12 @@
   }
   .cline.hit .g { color: var(--danger); font-weight: 800; }
   .cnote { color: var(--danger); font-weight: 700; white-space: normal; padding-bottom: .3rem; }
+  /* Bağlam diskten geldiğinde: bilgi, uyarı değil. */
+  .code-note {
+    margin: .8rem 1.1rem 0; font-size: .74rem; line-height: 1.5; color: var(--muted);
+    font-family: system-ui, sans-serif;
+    border-left: 2px solid var(--accent); padding-left: .7rem;
+  }
   .code-warn {
     margin: .8rem 1.1rem 0; font-size: .74rem; line-height: 1.5; color: var(--muted);
     font-family: system-ui, sans-serif;

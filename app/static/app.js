@@ -305,21 +305,63 @@ async function openCodeViewer(f) {
 
   const host = document.getElementById("codeScroll");
   host.innerHTML = "";
+
+  // Vurgulanacak satır elimizdeki bloğun dışındaysa, çalışma ağacından o
+  // satırın etrafını istiyoruz. Sunucu yalnızca raporun getirdiği parça
+  // dosyada birebir duruyorsa cevap veriyor — yani dosya, tarayıcının okuduğu
+  // sürüm. Duruma göre gösterilecek blok değişiyor.
+  let block = { lines, start, line: flagged, fromDisk: false };
+
+  // Panel önce açılıyor: dosya okuması hızlı ama yine de bir gidiş-dönüş, ve
+  // düğmeye basıldıktan sonra hiçbir şey olmaması en kötü geri bildirim.
+  document.getElementById("codeDrawer").classList.remove("hidden");
+  document.getElementById("codeVeil").classList.remove("hidden");
+  document.getElementById("codeClose").focus();
+
+  if (!inBlock && flagged) {
+    try {
+      const src = await api(`/findings/${f.id}/source`);
+      block = { lines: src.lines, start: src.start_line, line: src.line, fromDisk: true };
+    } catch (e) { /* okunamıyor: aşağıdaki uyarı kalıyor */ }
+  }
+
+  renderCodeBlock(host, f, block);
+  renderCodeFoot(f);
+  const hit = host.querySelector(".cline.hit");
+  if (hit) hit.scrollIntoView({ block: "center" });
+
+  document.getElementById("codeSub").textContent =
+    `satır ${block.start}–${block.start + block.lines.length - 1}`
+    + (flagged ? ` · bulgu satırı ${flagged}` : "")
+    + (block.fromDisk ? " · çalışma ağacından" : "");
+
+  // CWE/OWASP yalnızca bir analiz varsa biliniyor — onları üreten model.
+  if (aiScores[f.id]) {
+    try {
+      const a = await api(`/findings/${f.id}/analysis`);
+      factRow(facts, "CWE", a.cwe);
+      factRow(facts, "OWASP", a.owasp);
+    } catch (e) { /* analiz silinmiş olabilir */ }
+  }
+}
+
+function renderCodeBlock(host, f, block) {
   const lang = codeLang(f.asset);
-  let target = null;
+  const { lines, start, line: flagged } = block;
+  const end = start + lines.length - 1;
+  const canMark = flagged && flagged >= start && flagged <= end;
 
   lines.forEach((text, i) => {
     const no = start + i;
     const row = document.createElement("div");
-    row.className = "cline" + (no === flagged ? " hit" : "");
+    row.className = "cline" + (canMark && no === flagged ? " hit" : "");
     const gutter = document.createElement("span");
     gutter.className = "g";
     gutter.textContent = no;
     row.append(gutter, codeLineEl(text, lang));
     host.appendChild(row);
 
-    if (no === flagged) {
-      target = row;
+    if (canMark && no === flagged) {
       // Uyarı, işaretli satırın hemen altında: rengin ne anlama geldiğini
       // yazıyla da söylüyor, çünkü renk tek başına bilgi taşımamalı.
       const note = document.createElement("div");
@@ -335,29 +377,23 @@ async function openCodeViewer(f) {
     }
   });
 
-  if (!inBlock && flagged) {
+  if (block.fromDisk) {
+    const note = document.createElement("p");
+    note.className = "code-note";
+    note.textContent =
+      `Raporun getirdiği parça ${flagged}. satırı kapsamıyordu; bu bağlam `
+      + `çalışma ağacındaki dosyadan alındı. Dosya, raporun gördüğü sürümle `
+      + `birebir eşleştiği doğrulandıktan sonra okundu.`;
+    host.appendChild(note);
+  } else if (!canMark && flagged) {
     const warn = document.createElement("p");
     warn.className = "code-warn";
     warn.textContent =
       `Tarayıcı ${flagged}. satırı işaretledi ama raporun getirdiği blok `
-      + `${start}–${end} arasını kapsıyor; ikisi örtüşmediği için satır `
-      + `vurgulanamadı. Bu, çok satırlı bir çağrıda bandit'in davranışı.`;
+      + `${start}–${end} arasını kapsıyor ve dosyanın kendisi okunamadı; `
+      + `hangi satır olduğu güvenilir şekilde eşleştirilemediği için hiçbir `
+      + `satır vurgulanmadı.`;
     host.appendChild(warn);
-  }
-
-  renderCodeFoot(f);
-  document.getElementById("codeDrawer").classList.remove("hidden");
-  document.getElementById("codeVeil").classList.remove("hidden");
-  document.getElementById("codeClose").focus();
-  if (target) target.scrollIntoView({ block: "center" });
-
-  // CWE/OWASP yalnızca bir analiz varsa biliniyor — onları üreten model.
-  if (aiScores[f.id]) {
-    try {
-      const a = await api(`/findings/${f.id}/analysis`);
-      factRow(facts, "CWE", a.cwe);
-      factRow(facts, "OWASP", a.owasp);
-    } catch (e) { /* analiz silinmiş olabilir */ }
   }
 }
 

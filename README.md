@@ -57,6 +57,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Modele gönderilen kod parçasındaki sırrın ifşası | Gönderimden önce parola/token/anahtar değerleri maskelenir; kodun gönderilip gönderilmeyeceği ayrı bir ayar, kayıt her analizde ne gittiğini yazar | `test_ai.py::test_a_quoted_secret_is_redacted_before_it_is_sent` |
 | Modelin insan kararını ezmesi | AI kritikliği ve SLA'yı **yazmaz** — öneri üretir; uygulamak ayrı, denetlenen bir insan eylemidir | `test_ai.py::test_analysis_does_not_touch_the_finding` |
 | AI uç noktasının istekten gelmesi (SSRF + anahtar sızıntısı) | Uç nokta yalnızca yapılandırmadan okunur; arayüz gösterir ve test eder, yazamaz | Kod incelemesi · `app/config.py` |
+| **Yüklenen rapordaki yolun keyfi dosya okumaya dönmesi** | Kök dizin yalnızca yapılandırmadan; yol çözümlendikten *sonra* kapsama kontrolü (`..`, mutlak yol, dışa bakan sembolik bağ); uzantı beyaz listesi; ve dosya, raporun getirdiği parçayla birebir eşleşmezse hiç okunmaz | `test_source.py` (15 test) |
 | Model anahtarının arayüze düşmesi | `/ai/provider` yanıtında anahtar alanı yok — maskelenmiş hâli bile | `test_ai.py::test_the_api_key_is_never_in_a_response` |
 
 **Kapsam dışı (bilinçli):** çok kiracılı (multi-tenant) izolasyon,
@@ -135,11 +136,39 @@ bir şerit, altında da kritikliği ve bulgu adını yazan bir satır var.
 Ağ taramasından (nuclei) gelen bulgularda kaynak kod satırı yoktur; orada düğme
 **hiç çıkmaz**. Sahte bir kod görünümü üretmektense göstermemek doğru.
 
-**İşaretli satır her zaman blokta olmayabilir.** Bandit, çok satırlı bir çağrıda
-`region`'ı çağrının başına, `contextRegion`'ı kusurlu argümanın etrafına
-koyabiliyor; ikisi iç içe geçmiyor. O zaman görüntüleyici kırmızı bir satır
-uydurmuyor — kodu gösteriyor ve neden vurgulanamadığını yazıyor. Çizilemeyen bir
-vurguyu sessizce yutmak, yanlış satırı işaretlemekten daha az fark edilir olurdu.
+**İşaretli satır her zaman raporun getirdiği blokta olmuyor.** Bandit, çok
+satırlı bir çağrıda `region`'ı çağrının başına, `contextRegion`'ı kusurlu
+argümanın etrafına koyuyor; ikisi iç içe geçmiyor. Bu deponun gerçek bir
+taramasında beş bulgunun üçü böyle.
+
+Bu durumda bağlam **çalışma ağacındaki dosyadan** okunuyor — `SOURCE_ROOT`
+ayarlıysa. Ayarlı değilse ya da dosya güvenilir şekilde eşleştirilemiyorsa
+görüntüleyici **kırmızı bir satır uydurmuyor**: kodu gösteriyor ve neden
+vurgulanamadığını yazıyor.
+
+##### Dosyayı okumak, en tehlikeli kısım
+
+Bulgunun dosya yolu **yüklenen bir SARIF'ten** geliyor: yolu raporu yazan
+yazıyor. Naif bir uygulama, özellik kılığında keyfi dosya okumadır ve
+`../../.env` yazan bir rapor kibarca cevaplanır. Dört kapı var — ve sonuncusu
+en önemlisi:
+
+| Kapı | Ne yapıyor |
+| --- | --- |
+| **Kök dizin** | Yalnızca `SOURCE_ROOT`'tan geliyor; istekteki hiçbir şey onu adlandıramıyor. Boşsa özellik yok. |
+| **Çözümlemeden sonra kapsama** | Yol çözümleniyor (sembolik bağlar dahil) ve hâlâ kök içinde olmak zorunda. `..`, mutlak yol ve ağacın dışını gösteren bir bağ aynı kontrolde düşüyor. |
+| **Uzantı beyaz listesi** | Kaynak kodu dosyaları, başka bir şey değil. Kara liste `.env`, `.pem`, `.sqlite` ve bundan sonra icat edilecek her şeyi düşünmek zorunda kalırdı. |
+| **Sağlama** | Diskteki dosya tek başına kanıt değil — ağaç ilerlemiş olabilir ve bugünkü 176. satır başka bir ifade olabilir. **Raporun getirdiği parça, dosyanın o offsetlerinde birebir durmalı.** Durmuyorsa bu, taranan sürüm değildir ve hiçbir şey dönmez. |
+
+Sonuncusu vurguyu *makul* olmaktan çıkarıp *dürüst* yapan şey. Bu depoda
+`app/config.py` bulgusu tam olarak buna takılıyor: dosya taramadan sonra
+değiştiği için kaynak okunmuyor ve uyarı duruyor.
+
+İstek hiçbir dosya adlandırmıyor — çağıran bir bulgu kimliği veriyor, yol ve
+satır bulgunun kendi alanları, bulgu da zaten kimin görebileceğine göre sınırlı.
+Her ret aynı 404'ü ve aynı mesajı döndürüyor: "yok", "yasak", "yanlış tür" ve
+"eskimiş" ayırt edilebilseydi bu uç, dosya sistemini haritalamanın bir yolu
+olurdu.
 
 Satırlar raporun kendisinden gelir: SARIF `region.snippet` taşır, çoğu zaman
 etrafında daha geniş bir `contextRegion.snippet` ile birlikte. **Hiçbir şey
@@ -485,7 +514,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 174 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 196 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -616,7 +645,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 174 test
+pytest                                      # 196 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -645,6 +674,7 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
 | `POST` | `/monitor/run` (`?team_id=`) | Bearer (kendi varlıkları) |
 | `POST` | `/risk/expire` | Bearer (süresi dolan kabulleri yeniden açar) |
+| `GET` | `/findings/{id}/source` | Bearer (dosya adı istekte yok; bulgunun kendi yolu) |
 | `POST` `GET` | `/findings/{id}/analyze`, `/findings/{id}/analysis` | Bearer (yalnızca görebildiği bulgu) |
 | `GET` | `/ai/provider` | Bearer (anahtar döndürmez) |
 | `POST` | `/ai/test` | Yalnızca `admin` (dışa bağlantı açar) |
@@ -688,6 +718,7 @@ app/
   importers.py  # tarama raporu ayrıştırma (nuclei, SARIF)
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   ai.py         # model sağlayıcı dikişi, prompt sınırlandırma, maskeleme, şema
+  source.py     # kod görüntüleyici için kaynak okuma + yol/sürüm kontrolleri
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı
   config.py     # ortam ayarları

@@ -24,6 +24,7 @@ from app.config import AI_HOURLY_LIMIT, SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
 from app.importers import parse_nuclei, parse_sarif
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
+from app.source import SourceUnavailable, window_for
 from app.models import (
     ACCEPTED_RISK,
     MAX_ACCEPTANCE_DAYS,
@@ -1364,6 +1365,43 @@ def ai_analyses(
         }
         for row in rows
     ]
+
+
+@app.get("/findings/{finding_id}/source")
+def finding_source(
+    finding_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The lines around this finding, read from the configured working tree.
+
+    Asked for only when the report's own snippet cannot place the flagged line
+    — bandit's `region` and `contextRegion` do not always nest, and the line to
+    highlight can fall outside the block that came with the report.
+
+    Nothing in the request names a file. The path and the line are the
+    finding's own, and the finding is already scoped to who may see it; the
+    caller supplies an id and nothing else.
+
+    404 for every reason it cannot be served: not configured, outside the root,
+    wrong kind of file, missing, or — the important one — a file that no longer
+    matches what the scanner read. Distinguishing those in the response would
+    turn this into a way to map the filesystem.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+
+    try:
+        return window_for(
+            finding.asset,
+            finding.evidence_line,
+            finding.evidence or "",
+            finding.evidence_start,
+        )
+    except SourceUnavailable:
+        raise HTTPException(
+            status_code=404,
+            detail="Bu bulgu için kaynak dosya okunamıyor.",
+        )
 
 
 @app.get("/findings/{finding_id}/analysis", response_model=AIAnalysisResponse)
