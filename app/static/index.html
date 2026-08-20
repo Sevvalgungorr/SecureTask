@@ -74,6 +74,7 @@
       <button class="tab active" data-view="dash" type="button">Pano</button>
       <button class="tab" data-view="my" type="button">Bulgularım</button>
       <button class="tab" data-view="risk" type="button">Risk</button>
+      <button class="tab tab-ai" data-view="analyst" type="button"><span class="ai-mark" id="tabMark"></span>AI Analyst</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
@@ -262,6 +263,55 @@
         <ul class="findings" id="riskList"></ul>
         <p class="chart-note" id="riskNote"></p>
       </div>
+    </div>
+
+    <!-- AI Analyst. Bulgularım'ın ya da Risk'in kopyası değil: tek bir soruyu
+         yanıtlıyor — "tüm AI değerlendirmelerine bakınca önce neye bakmalıyım".
+         Bulgu kartları burada yeniden üretilmiyor, risk matrisi de. -->
+    <div id="analystView" class="hidden">
+      <div class="hero">
+        <div class="hero-mark" id="heroMark"></div>
+        <div>
+          <h1>AI Security Analyst</h1>
+          <p>AI destekli risk değerlendirmesi, önceliklendirme ve güvenlik içgörüleri.</p>
+        </div>
+      </div>
+
+      <div class="kpis" id="analystKpis"></div>
+
+      <div class="dash-grid">
+        <div class="admin-block">
+          <div class="list-head">
+            <h2>AI önceliklendirme</h2>
+            <span class="badge">AI risk skoruna göre</span>
+          </div>
+          <div class="prio-list" id="prioList"></div>
+        </div>
+
+        <div class="dash-col">
+          <div class="admin-block">
+            <div class="list-head">
+              <h2>AI içgörüleri</h2>
+              <span class="badge" id="insightBadge"></span>
+            </div>
+            <div class="insights" id="insightList"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="empty hidden" id="analystEmpty">
+        <div class="ico" id="emptyMark"></div>
+        Henüz AI analizi yok.<br>
+        <span class="empty-sub">Bulgularım sayfasından bir güvenlik bulgusunu AI ile
+        analiz ettiğinde sonuçlar burada görünecek.</span>
+        <div><button class="btn sm" id="goFindings" type="button">Bulgulara git</button></div>
+      </div>
+
+      <p class="chart-note analyst-note">
+        AI sonuçları karar destek amaçlı önerilerdir ve manuel doğrulama
+        gerektirebilir. Hiçbiri bulgunun kritikliğine, SLA'sına veya durumuna
+        kendiliğinden uygulanmaz.
+      </p>
     </div>
 
     <div id="assetsView" class="hidden">

@@ -1356,12 +1356,20 @@ def ai_analyses(
         .all()
     )
 
+    # Still a summary, not the analysis. These are the fields the list badge
+    # and the AI Analyst page need to rank and compare; the reasoning — why it
+    # matters, the impact, the fix — stays behind its own request, because a
+    # page of prose per row is not what either surface is drawing.
     return [
         {
             "finding_id": row.finding_id,
             "risk_score": float(row.risk_score or 0),
             "suggested_severity": row.suggested_severity,
             "confidence": row.confidence,
+            "exploitability": row.exploitability,
+            "suggested_sla_hours": row.suggested_sla_hours,
+            "cwe": row.cwe or "",
+            "created_at": row.created_at,
         }
         for row in rows
     ]

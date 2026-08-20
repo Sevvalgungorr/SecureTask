@@ -593,9 +593,14 @@ async function analyzeFinding(f, rerun) {
     renderAnalysis(f, a);
     addRerun(f);
     // Satırdaki rozet, panel kapanmadan güncellensin.
-    aiScores[f.id] = { finding_id: f.id, risk_score: a.risk_score,
-                       suggested_severity: a.suggested_severity, confidence: a.confidence };
+    aiScores[f.id] = {
+      finding_id: f.id, risk_score: a.risk_score,
+      suggested_severity: a.suggested_severity, confidence: a.confidence,
+      exploitability: a.exploitability, suggested_sla_hours: a.suggested_sla_hours,
+      cwe: a.cwe, created_at: a.created_at,
+    };
     renderMyList();
+    if (!document.getElementById("analystView").classList.contains("hidden")) renderAnalyst();
   } catch (e) {
     const body = document.getElementById("aiBody");
     body.innerHTML = "";
@@ -1066,6 +1071,7 @@ async function loadFindings() {
   // yapılan bir kritiklik değişikliği bulguyu artık ait olmadığı hücrede
   // bırakırdı — ızgara veriyle çelişirdi.
   if (!document.getElementById("riskView").classList.contains("hidden")) renderRisk();
+  if (!document.getElementById("analystView").classList.contains("hidden")) renderAnalyst();
 }
 
 function setupFilters() {
@@ -1988,6 +1994,11 @@ function renderRiskList(open) {
 document.getElementById("riskClear").onclick = () => { riskCell = null; renderRisk(); };
 
 document.getElementById("aiTitleMark").innerHTML = SPARK;   // static icon markup
+document.getElementById("tabMark").innerHTML = SPARK;    // static icon markup
+document.getElementById("heroMark").innerHTML = SPARK;
+document.getElementById("emptyMark").innerHTML = SPARK;
+document.getElementById("goFindings").onclick = () =>
+  document.querySelector('.tab[data-view="my"]').click();
 document.getElementById("codeClose").onclick = closeCodeViewer;
 document.getElementById("codeVeil").onclick = closeCodeViewer;
 document.getElementById("aiClose").onclick = closeAiDrawer;
@@ -2039,7 +2050,286 @@ document.getElementById("aiTestBtn").onclick = async (e) => {
   e.target.disabled = false;
 };
 
-const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- AI Analyst -------------------------------------------------------------
+//
+// Tek soruyu yanıtlıyor: tüm AI değerlendirmelerine bakınca önce neye
+// bakmalıyım. Bulgu kartları ve risk matrisi burada yeniden üretilmiyor —
+// ikisi de kendi sayfalarında duruyor.
+//
+// Sayfa açılırken modele hiçbir istek gitmiyor. Her şey saklanmış analiz
+// kayıtlarından ve zaten bellekte olan bulgu listesinden hesaplanıyor.
+
+const CONF_LABEL = { low: "Düşük güven", medium: "Orta güven", high: "Yüksek güven" };
+const EXPL_LABEL = { low: "düşük", medium: "orta", high: "yüksek" };
+
+// Bir analizin "yüksek öncelikli" sayılması için tanım. Sayı ancak
+// açıklanabilirse bir KPI'dır: skoru yüksek, ve modelin kendi güveni düşük
+// değil — düşük güvenli bir 9, insan incelemesi ister, öncelik değil.
+const isPriority = a => a.risk_score >= 7 && a.confidence !== "low";
+
+// AI'ın okuması ile kayıtlı kritikliğin farkı. Uygulamanın başka hiçbir yeri
+// bunu söyleyemiyor, ve modelin en savunulabilir kullanımı da bu:
+// otorite değil, karşılaştırma.
+function severityGap(a, f) {
+  if (!f) return 0;
+  // SEV_ORDER sıralama için ters: critical 0, low 3. Yani "AI daha yüksek
+  // risk görüyor" demek, önerinin daha KÜÇÜK sayıya sahip olması demek —
+  // çıkarma bu yüzden kayıtlı olandan öneriye doğru.
+  return (SEV_ORDER[f.severity] ?? 2) - (SEV_ORDER[a.suggested_severity] ?? 2);
+}
+
+function analystRows() {
+  return Object.values(aiScores)
+    .map(a => ({ a, f: myFindings.find(x => x.id === a.finding_id) }))
+    .filter(r => r.f)
+    .sort((x, y) => y.a.risk_score - x.a.risk_score);
+}
+
+function ringEl(pct, cls) {
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 36 36");
+  svg.setAttribute("class", "mini-ring " + (cls || ""));
+  const C = 2 * Math.PI * 15;
+  ["bg", "fg"].forEach(part => {
+    const c = document.createElementNS(NS, "circle");
+    c.setAttribute("cx", "18"); c.setAttribute("cy", "18"); c.setAttribute("r", "15");
+    c.setAttribute("class", part);
+    if (part === "fg") {
+      c.setAttribute("stroke-dasharray", C.toFixed(2));
+      c.setAttribute("stroke-dashoffset", (C * (1 - pct)).toFixed(2));
+    }
+    svg.appendChild(c);
+  });
+  return svg;
+}
+
+function kpiCard(host, label, value, sub, extra) {
+  const card = document.createElement("div");
+  card.className = "kpi";
+  const l = document.createElement("span");
+  l.className = "k-lbl"; l.textContent = label;
+  const v = document.createElement("b");
+  v.className = "k-val"; v.textContent = value;
+  const sm = document.createElement("span");
+  sm.className = "k-sub"; sm.textContent = sub;
+  card.append(l, v, sm);
+  if (extra) card.appendChild(extra);
+  host.appendChild(card);
+  return card;
+}
+
+function renderAnalystKpis(rows) {
+  const host = document.getElementById("analystKpis");
+  host.innerHTML = "";
+
+  const open = myFindings.filter(f => !isClosed(f));
+  const scores = rows.map(r => r.a.risk_score);
+  const avg = scores.length ? scores.reduce((s, n) => s + n, 0) / scores.length : 0;
+  const lowConf = rows.filter(r => r.a.confidence === "low").length;
+  const prio = rows.filter(r => isPriority(r.a)).length;
+  // Kapsam: açık bulguların kaçına hiç bakılmadı. "Önce neye bakmalıyım"
+  // sorusunun yarısı, henüz hiç değerlendirilmemiş olanlar.
+  const seen = new Set(rows.map(r => r.a.finding_id));
+  const unseen = open.filter(f => !seen.has(f.id));
+
+  const bar = frac => {
+    const t = document.createElement("div");
+    t.className = "k-bar";
+    const i = document.createElement("i");
+    animateTo(i, "width", Math.round(frac * 100) + "%");
+    t.appendChild(i);
+    return t;
+  };
+
+  kpiCard(host, "Analiz edilen bulgu", String(rows.length),
+    open.length ? `${unseen.length} açık bulgu hiç analiz edilmedi` : "açık bulgu yok",
+    bar(open.length ? (open.length - unseen.length) / open.length : 0));
+
+  const ringWrap = document.createElement("div");
+  ringWrap.className = "k-ring";
+  ringWrap.appendChild(ringEl(avg / 10, "r-" + (avg >= 7 ? "hot" : avg >= 4 ? "warn" : "calm")));
+  kpiCard(host, "Ortalama AI risk", avg.toFixed(1),
+    rows.length ? `${rows.length} analiz üzerinden` : "—", ringWrap);
+
+  kpiCard(host, "Manuel inceleme", String(lowConf),
+    "modelin güveni düşük", bar(rows.length ? lowConf / rows.length : 0))
+    .classList.toggle("alert", lowConf > 0);
+
+  kpiCard(host, "Yüksek öncelikli", String(prio),
+    "skor ≥ 7 · güven düşük değil", bar(rows.length ? prio / rows.length : 0));
+}
+
+function renderPriorities(rows) {
+  const host = document.getElementById("prioList");
+  host.innerHTML = "";
+
+  rows.slice(0, 8).forEach((r, i) => {
+    const { a, f } = r;
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "prio";
+    card.title = "AI analizini aç";
+
+    const rank = document.createElement("span");
+    rank.className = "prio-rank";
+    rank.textContent = "#" + (i + 1);
+
+    const mid = document.createElement("div");
+    mid.className = "prio-mid";
+    const name = document.createElement("div");
+    name.className = "prio-name";
+    name.textContent = f.title;                 // textContent → XSS'e kapalı
+    mid.appendChild(name);
+
+    const chips = document.createElement("div");
+    chips.className = "prio-chips";
+    const conf = document.createElement("span");
+    conf.className = "conf c-" + a.confidence;
+    conf.textContent = CONF_LABEL[a.confidence] || a.confidence;
+    chips.appendChild(conf);
+
+    const expl = document.createElement("span");
+    expl.className = "prio-meta";
+    expl.textContent = `sömürülebilirlik ${EXPL_LABEL[a.exploitability] || a.exploitability}`;
+    chips.appendChild(expl);
+
+    if (a.suggested_sla_hours) {
+      const sla = document.createElement("span");
+      sla.className = "prio-meta";
+      sla.textContent = `önerilen ${a.suggested_sla_hours} saat`;
+      chips.appendChild(sla);
+    }
+
+    const gap = severityGap(a, f);
+    if (gap !== 0) {
+      const warn = document.createElement("span");
+      warn.className = "gap " + (gap > 0 ? "up" : "down");
+      warn.textContent = gap > 0
+        ? `AI daha yüksek risk görüyor (kayıtlı: ${SEV_LABEL[f.severity]})`
+        : `AI daha düşük risk görüyor (kayıtlı: ${SEV_LABEL[f.severity]})`;
+      chips.appendChild(warn);
+    }
+
+    if (a.confidence === "low") {
+      const note = document.createElement("span");
+      note.className = "gap review";
+      note.textContent = "manuel inceleme önerilir";
+      chips.appendChild(note);
+    }
+    mid.appendChild(chips);
+
+    const score = document.createElement("div");
+    score.className = "prio-score s-" + (a.risk_score >= 9 ? 3 : a.risk_score >= 7 ? 2 : a.risk_score >= 4 ? 1 : 0);
+    const num = document.createElement("b");
+    num.textContent = a.risk_score.toFixed(1);
+    const outOf = document.createElement("span");
+    outOf.textContent = "/10";
+    const track = document.createElement("div");
+    track.className = "prio-bar";
+    const fill = document.createElement("i");
+    animateTo(fill, "width", (a.risk_score * 10).toFixed(0) + "%");
+    track.appendChild(fill);
+    score.append(num, outOf, track);
+
+    card.append(rank, mid, score);
+    // Ayrı bir detay paneli yok: mevcut AI Güvenlik Analizi çekmecesi açılıyor.
+    card.onclick = () => analyzeFinding(f, false);
+    host.appendChild(card);
+  });
+}
+
+// İçgörüler yalnızca gerçekten veriden çıkarılabiliyorsa üretiliyor. Ekranı
+// doldurmak için modele bir şey sordurulmuyor; hepsi saklanmış kayıtların
+// aritmetiği.
+function buildInsights(rows) {
+  const out = [];
+  const lowConf = rows.filter(r => r.a.confidence === "low");
+  const higher = rows.filter(r => severityGap(r.a, r.f) > 0);
+  const lower = rows.filter(r => severityGap(r.a, r.f) < 0);
+
+  if (lowConf.length) out.push(["review", "Manuel inceleme gerekli",
+    `${lowConf.length} analizde modelin kendi güveni düşük. Bu okumalar kesin `
+    + "sonuç değil, doğrulanacak birer iddia."]);
+
+  if (higher.length) out.push(["up", "AI daha yüksek risk görüyor",
+    `${higher.length} bulgunun AI değerlendirmesi kayıtlı kritiklikten daha `
+    + "yüksek. Biri yanlış; hangisi olduğuna bakılmalı."]);
+
+  if (lower.length) out.push(["down", "AI daha düşük risk görüyor",
+    `${lower.length} bulguda AI, kayıtlı kritiklikten daha düşük risk `
+    + "görüyor. Yanlış pozitif olabilir."]);
+
+  // SLA uyumsuzluğu: AI'ın önerdiği süre, kayıtlı son tarihten önce doluyor.
+  const now = today();
+  const tight = rows.filter(({ a, f }) => {
+    if (!a.suggested_sla_hours || !f.due_date || isClosed(f)) return false;
+    return a.suggested_sla_hours / 24 < daysApart(now, f.due_date);
+  });
+  if (tight.length) out.push(["clock", "SLA uyumsuzluğu",
+    `${tight.length} bulgu için AI'ın önerdiği çözüm süresi, kayıtlı SLA'dan `
+    + "daha kısa."]);
+
+  // Tekrarlayan kural: aynı CWE birden çok analizde.
+  const cwes = {};
+  rows.forEach(r => { if (r.a.cwe) cwes[r.a.cwe] = (cwes[r.a.cwe] || 0) + 1; });
+  Object.entries(cwes).filter(([, n]) => n > 1).forEach(([cwe, n]) => {
+    out.push(["repeat", "Tekrarlayan güvenlik problemi",
+      `${cwe} ${n} analizde görülüyor. Tek tek düzeltmek yerine kalıbı `
+      + "aramak daha ucuz olabilir."]);
+  });
+
+  // Kapsam: kritik/yüksek ama hiç bakılmamış olanlar.
+  const seen = new Set(rows.map(r => r.a.finding_id));
+  const blind = myFindings.filter(f =>
+    !isClosed(f) && !seen.has(f.id) && (f.severity === "critical" || f.severity === "high"));
+  if (blind.length) out.push(["blind", "Analiz edilmemiş yüksek kritiklik",
+    `${blind.length} açık kritik/yüksek bulgu henüz AI ile değerlendirilmedi.`]);
+
+  return out;
+}
+
+function renderInsights(rows) {
+  const host = document.getElementById("insightList");
+  const badge = document.getElementById("insightBadge");
+  host.innerHTML = "";
+  const items = buildInsights(rows);
+  badge.textContent = items.length ? `${items.length} bulgu` : "";
+
+  if (!items.length) {
+    const p = document.createElement("p");
+    p.className = "chart-note";
+    p.textContent = "Henüz toplu AI içgörüsü oluşturmak için yeterli analiz bulunmuyor.";
+    host.appendChild(p);
+    return;
+  }
+
+  items.forEach(([kind, title, body]) => {
+    const card = document.createElement("div");
+    card.className = "insight i-" + kind;
+    const h = document.createElement("div");
+    h.className = "insight-title"; h.textContent = title;
+    const b = document.createElement("p");
+    b.textContent = body;
+    card.append(h, b);
+    host.appendChild(card);
+  });
+}
+
+function renderAnalyst() {
+  const rows = analystRows();
+  const empty = !rows.length;
+  document.getElementById("analystEmpty").classList.toggle("hidden", !empty);
+  document.querySelectorAll("#analystView .kpis, #analystView .dash-grid")
+    .forEach(el => el.classList.toggle("hidden", empty));
+
+  if (empty) return;
+  renderAnalystKpis(rows);
+  renderPriorities(rows);
+  renderInsights(rows);
+}
+
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -2057,6 +2347,9 @@ function setupTabs() {
       // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
       if (v === "dash") loadFindings().then(loadDash).catch(() => {});
       if (v === "risk") loadFindings().catch(() => {});
+      // Modele hiçbir istek gitmiyor: saklanmış analizler zaten
+      // bulgularla birlikte geliyor.
+      if (v === "analyst") loadFindings().catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
