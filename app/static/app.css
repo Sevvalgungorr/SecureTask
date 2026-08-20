@@ -413,6 +413,44 @@
      ama alarm olmamalı — ikisi de bir hata değil, bilinmesi gereken bir şey. */
   .warn-text { color: var(--sla-hot); font-weight: 700; }
 
+  /* RAG rozeti. Yalnızca gerçekten kaynak getirildiğinde çiziliyor, o yüzden
+     varlığı bir bilgi taşıyor — süs değil. */
+  .rag-badge {
+    display: inline-flex; align-items: center; gap: .35rem; margin-bottom: .9rem;
+    padding: .25rem .6rem; border-radius: 999px; font-size: .72rem; font-weight: 700;
+    color: var(--accent); background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  .rag-badge .ai-mark { display: inline-flex; color: var(--ai-spark); }
+  .rag-badge .ai-mark svg { width: 13px; height: 13px; display: block; }
+
+  .ai-sources { margin: 1.1rem 0 0; }
+  .ai-sources-head {
+    font-size: .72rem; text-transform: uppercase; letter-spacing: .1em;
+    color: var(--faint); font-weight: 800; margin-bottom: .45rem;
+  }
+  .src-card {
+    display: flex; align-items: baseline; gap: .55rem; margin-bottom: .35rem;
+    padding: .5rem .65rem; border-radius: 10px; text-decoration: none;
+    background: var(--line-2); border: 1px solid var(--line); color: var(--ink);
+  }
+  a.src-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
+    background: var(--accent-soft);
+  }
+  .src-id {
+    font-size: .72rem; font-weight: 800; color: var(--accent); flex-shrink: 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .src-title { font-size: .78rem; color: var(--muted); }
+
+  /* Hero'daki gösterge: küçük, KPI değil. */
+  .kb-chip {
+    display: inline-block; margin-top: .5rem; padding: .18rem .55rem;
+    border-radius: 999px; font-size: .72rem; font-weight: 700;
+    color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
+
   .ai-sec { margin: 1.1rem 0; }
   .ai-sec h3 {
     margin: 0 0 .35rem; font-size: .72rem; text-transform: uppercase;

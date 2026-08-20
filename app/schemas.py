@@ -140,6 +140,21 @@ class AIProviderResponse(BaseModel):
     note: str = ""
 
 
+class AISourceResponse(BaseModel):
+    """One reference passage that was given to the model.
+
+    Resolved from the knowledge base at read time, not stored alongside the
+    analysis: an identifier that no longer exists is simply dropped, so a
+    citation is only shown while the thing it points at is still there.
+    """
+
+    source: str
+    id: str
+    title: str
+    summary: str = ""
+    reference: str = ""
+
+
 class AIAnalysisResponse(BaseModel):
     """A model's reading of a finding. Every rating here is a suggestion.
 
@@ -169,6 +184,11 @@ class AIAnalysisResponse(BaseModel):
     developer_note: str = ""
     cwe: str = ""
     owasp: str = ""
+    # The passages that were actually in the request. Empty means the model
+    # answered from its own knowledge — which the interface says plainly rather
+    # than implying a lookup happened.
+    sources: list[AISourceResponse] = []
+    kb_version: str = ""
 
 
 class AuditLogResponse(BaseModel):

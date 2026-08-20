@@ -11,7 +11,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import ai, audit
+from app import ai, audit, knowledge
 from app.auth import (
     callback_router,
     get_current_user,
@@ -42,6 +42,7 @@ from app.models import (
 )
 from app.schemas import (
     AIAnalysisResponse,
+    AISourceResponse,
     AIProviderResponse,
     AssetCreate,
     AssetResponse,
@@ -1281,6 +1282,19 @@ def _analysis_response(row: AIAnalysis) -> AIAnalysisResponse:
         developer_note=row.developer_note or "",
         cwe=row.cwe or "",
         owasp=row.owasp or "",
+        # Resolved from the corpus now, not read back from the row. An
+        # identifier whose passage has since been removed is dropped rather
+        # than shown as a citation to something that is no longer there.
+        sources=[
+            AISourceResponse(
+                source=chunk.source, id=chunk.id, title=chunk.title,
+                summary=chunk.text[:220], reference=chunk.reference,
+            )
+            for chunk in filter(None, (
+                knowledge.by_key(key) for key in (row.sources or "").split(",") if key
+            ))
+        ],
+        kb_version=row.kb_version or "",
     )
 
 
@@ -1370,6 +1384,9 @@ def ai_analyses(
             "suggested_sla_hours": row.suggested_sla_hours,
             "cwe": row.cwe or "",
             "created_at": row.created_at,
+            # Which body of knowledge produced it — empty when none did, which
+            # is how the page counts RAG-backed readings without asking again.
+            "kb_version": row.kb_version or "",
         }
         for row in rows
     ]
@@ -1491,6 +1508,8 @@ def analyze_finding(
     row.developer_note = result["developer_note"]
     row.cwe = result["cwe"]
     row.owasp = result["owasp"]
+    row.sources = ",".join(result.get("sources") or [])[:500]
+    row.kb_version = result.get("kb_version") or ""
     row.created_at = datetime.now(timezone.utc)
 
     db.commit()
@@ -1503,7 +1522,11 @@ def analyze_finding(
         db, user, "analyzed", finding.id,
         f"{finding.title} · {result['provider']}/{result['model']} · "
         f"öneri {result['suggested_severity']} · kod "
-        f"{'gönderildi' if result['code_sent'] else 'gönderilmedi'}",
+        f"{'gönderildi' if result['code_sent'] else 'gönderilmedi'}"
+        # Identifiers and a count, never passage text or prompt content: enough
+        # to answer "what did this analysis get to read", nothing more.
+        + (f" · kaynak {'+'.join(result['sources'])} (kb {result['kb_version']})"
+           if result.get("sources") else " · kaynak yok"),
     )
 
     return _analysis_response(row)

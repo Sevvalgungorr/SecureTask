@@ -1,0 +1,76 @@
+{
+  "source": "OWASP",
+  "note": "OWASP Top 10 (2021) categories, written as short reference entries. These describe the category a finding belongs to and what generally addresses it — the specific fix comes from the CWE entry and the code itself.",
+  "entries": [
+    {
+      "id": "A01",
+      "title": "A01: Broken Access Control",
+      "keywords": ["access control", "authorization", "idor", "permission", "privilege", "path traversal", "forced browsing"],
+      "text": "Users can act outside their intended permissions: reading another account's records by changing an identifier, reaching an admin route directly, or escalating role. Enforce authorisation on the server for every request, deny by default, and scope queries to the caller rather than filtering results after loading them. Returning 404 rather than 403 for records outside a caller's scope avoids confirming that they exist.",
+      "reference": "https://owasp.org/Top10/A01_2021-Broken_Access_Control/"
+    },
+    {
+      "id": "A02",
+      "title": "A02: Cryptographic Failures",
+      "keywords": ["crypto", "encryption", "tls", "hash", "cleartext", "certificate", "random"],
+      "text": "Sensitive data is exposed because it was not protected, or was protected with something unfit — cleartext storage or transport, obsolete algorithms, predictable values, unverified certificates. Decide first what data actually needs protection and against whom; then use current algorithms with well-reviewed libraries rather than assembling primitives.",
+      "reference": "https://owasp.org/Top10/A02_2021-Cryptographic_Failures/"
+    },
+    {
+      "id": "A03",
+      "title": "A03: Injection",
+      "keywords": ["injection", "sql", "command", "xss", "ldap", "template", "query"],
+      "text": "Untrusted input is interpreted as code or query structure by an interpreter — SQL, a shell, a template engine, a browser parsing HTML. The class is solved by separating data from instruction: parameterised queries, argument lists instead of shell strings, contextual output encoding. Input validation reduces the surface but does not close the class on its own.",
+      "reference": "https://owasp.org/Top10/A03_2021-Injection/"
+    },
+    {
+      "id": "A04",
+      "title": "A04: Insecure Design",
+      "keywords": ["design", "threat model", "business logic", "rate limit", "workflow"],
+      "text": "The weakness is in what the system was designed to do, not in how it was written, so no amount of careful implementation removes it. Missing rate limits, workflows that trust a client-side decision, or a process with no second pair of eyes on an irreversible action belong here. Threat modelling and explicit trust boundaries are the remedy.",
+      "reference": "https://owasp.org/Top10/A04_2021-Insecure_Design/"
+    },
+    {
+      "id": "A05",
+      "title": "A05: Security Misconfiguration",
+      "keywords": ["configuration", "header", "default", "debug", "listing", "banner", "hardening"],
+      "text": "Defaults left in place, unnecessary features enabled, missing hardening headers, verbose errors, or components deployed with debug settings. These rarely cause a breach alone but consistently make one cheaper. Treat configuration as reviewable code and verify it in the environment that actually runs, not only in the repository.",
+      "reference": "https://owasp.org/Top10/A05_2021-Security_Misconfiguration/"
+    },
+    {
+      "id": "A06",
+      "title": "A06: Vulnerable and Outdated Components",
+      "keywords": ["dependency", "library", "outdated", "cve", "version", "package"],
+      "text": "A dependency with a known vulnerability is in use, and the application inherits it. Exploitability depends on whether the vulnerable code path is actually reached, which is why an advisory alone is not a severity. Keep an inventory, update on a schedule rather than on incident, and fail the build on known-vulnerable versions.",
+      "reference": "https://owasp.org/Top10/A06_2021-Vulnerable_and_Outdated_Components/"
+    },
+    {
+      "id": "A07",
+      "title": "A07: Identification and Authentication Failures",
+      "keywords": ["authentication", "session", "password", "credential", "mfa", "brute force", "token"],
+      "text": "Identity can be assumed by someone who should not have it: weak or reused credentials, credentials in source, sessions that do not expire or rotate, missing second factor on sensitive actions, no protection against automated guessing. Delegate authentication to a provider where possible, and require a second factor for actions that cannot be undone.",
+      "reference": "https://owasp.org/Top10/A07_2021-Identification_and_Authentication_Failures/"
+    },
+    {
+      "id": "A08",
+      "title": "A08: Software and Data Integrity Failures",
+      "keywords": ["integrity", "deserialization", "pipeline", "update", "signature", "supply chain"],
+      "text": "Code or data is trusted without verifying where it came from — unsigned updates, unpinned dependencies, deserialisation of untrusted input, a build pipeline that anyone can influence. Verify signatures, pin versions, and treat the pipeline as production infrastructure.",
+      "reference": "https://owasp.org/Top10/A08_2021-Software_and_Data_Integrity_Failures/"
+    },
+    {
+      "id": "A09",
+      "title": "A09: Security Logging and Monitoring Failures",
+      "keywords": ["logging", "monitoring", "audit", "detection", "alert", "trail"],
+      "text": "Attacks are not detected, or cannot be reconstructed afterwards, because the events were never recorded or the record can be altered. Log authentication, access control failures and changes to security decisions with enough context to answer who, what and when; protect the log from the people it records; and make sure something actually reads it.",
+      "reference": "https://owasp.org/Top10/A09_2021-Security_Logging_and_Monitoring_Failures/"
+    },
+    {
+      "id": "A10",
+      "title": "A10: Server-Side Request Forgery",
+      "keywords": ["ssrf", "outbound", "url", "internal", "metadata", "proxy"],
+      "text": "The application fetches a destination the user supplies, letting it act as a proxy into the network it runs in. Cloud metadata services make this immediately valuable to an attacker. Validate the resolved address rather than the hostname, re-check on every redirect, and prefer a registry of permitted destinations to arbitrary URLs.",
+      "reference": "https://owasp.org/Top10/A10_2021-Server-Side_Request_Forgery_%28SSRF%29/"
+    }
+  ]
+}

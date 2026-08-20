@@ -501,6 +501,22 @@ function renderAnalysis(f, a) {
   head.append(num, outOf, sev);
   body.appendChild(head);
 
+  // "RAG destekli" yalnızca gerçekten kaynak getirildiyse yazılıyor. Getirme
+  // çalışmadıysa ya da hiçbir şey eşleşmediyse rozet hiç çıkmıyor — model
+  // kendi bilgisinden cevapladı demektir ve öyle görünmeli.
+  if (a.sources && a.sources.length) {
+    const badge = document.createElement("div");
+    badge.className = "rag-badge";
+    const mark = document.createElement("span");
+    mark.className = "ai-mark";
+    mark.innerHTML = SPARK;               // static icon markup only
+    badge.appendChild(mark);
+    badge.appendChild(document.createTextNode(
+      `RAG destekli · ${a.sources.length} kaynak`
+    ));
+    body.appendChild(badge);
+  }
+
   const facts = document.createElement("dl");
   facts.className = "sec-kv ai-facts";
   const TR = { low: "düşük", medium: "orta", high: "yüksek" };
@@ -565,6 +581,40 @@ function renderAnalysis(f, a) {
     body.appendChild(apply);
   }
 
+  // Analizde kullanılan kaynaklar. Yalnızca getirme katmanının gerçekten
+  // modele verdiği pasajlar — modelin kendi saydıkları değil.
+  if (a.sources && a.sources.length) {
+    const box = document.createElement("div");
+    box.className = "ai-sources";
+    const head = document.createElement("div");
+    head.className = "ai-sources-head";
+    head.textContent = "Analizde kullanılan kaynaklar";
+    box.appendChild(head);
+
+    a.sources.forEach(src => {
+      // Referans varsa bağlantı, yoksa düz kutu. Uydurma bir bağlantı
+      // üretilmiyor.
+      const row = document.createElement(src.reference ? "a" : "div");
+      row.className = "src-card";
+      if (src.reference) {
+        row.href = src.reference;
+        row.target = "_blank";
+        // Yeni sekmeye açılan bir bağlantı, açtığı sayfaya window.opener
+        // veriyor; noopener onu kesiyor.
+        row.rel = "noopener noreferrer";
+      }
+      const id = document.createElement("span");
+      id.className = "src-id";
+      id.textContent = src.id;
+      const title = document.createElement("span");
+      title.className = "src-title";
+      title.textContent = src.title;      // textContent → XSS'e kapalı
+      row.append(id, title);
+      box.appendChild(row);
+    });
+    body.appendChild(box);
+  }
+
   const foot = document.createElement("p");
   foot.className = "ai-foot";
   foot.textContent =
@@ -597,7 +647,7 @@ async function analyzeFinding(f, rerun) {
       finding_id: f.id, risk_score: a.risk_score,
       suggested_severity: a.suggested_severity, confidence: a.confidence,
       exploitability: a.exploitability, suggested_sla_hours: a.suggested_sla_hours,
-      cwe: a.cwe, created_at: a.created_at,
+      cwe: a.cwe, created_at: a.created_at, kb_version: a.kb_version,
     };
     renderMyList();
     if (!document.getElementById("analystView").classList.contains("hidden")) renderAnalyst();
@@ -2329,6 +2379,13 @@ function renderAnalyst() {
   document.getElementById("analystEmpty").classList.toggle("hidden", !empty);
   document.querySelectorAll("#analystView .kpis, #analystView .dash-grid")
     .forEach(el => el.classList.toggle("hidden", empty));
+
+  // Küçük bir gösterge, KPI değil: kaç analizin bilgi tabanı desteğiyle
+  // üretildiğini söylüyor. Hiçbiri değilse hiç çıkmıyor.
+  const chip = document.getElementById("kbChip");
+  const withKb = rows.filter(r => r.a.kb_version).length;
+  chip.classList.toggle("hidden", !withKb);
+  chip.textContent = `Bilgi tabanı aktif · ${withKb}/${rows.length} analiz RAG destekli`;
 
   if (empty) return;
   renderAnalystKpis(rows);
