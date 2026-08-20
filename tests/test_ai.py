@@ -400,6 +400,7 @@ def test_the_list_learns_which_findings_were_analysed(client, model):
     assert set(rows[0]) == {
         "finding_id", "risk_score", "suggested_severity", "confidence",
         "exploitability", "suggested_sla_hours", "cwe", "created_at",
+        "kb_version",
     }
     assert "summary" not in rows[0] and "remediation" not in rows[0]
 
@@ -412,3 +413,75 @@ def test_the_summary_list_respects_who_may_see_what(client, model):
     client.login_as("mallory")
 
     assert client.get("/ai/analyses").json() == []
+
+
+# --- retrieval feeding the analysis ------------------------------------------
+
+
+def test_the_retrieved_passage_reaches_the_prompt(client, model):
+    """The point of the whole layer: the model is told what this weakness is
+    rather than recalling it."""
+    client.login_as("alice")
+    finding_id = client.post(
+        "/findings", json=_payload(title="Possible SQL injection")
+    ).json()["id"]
+    client.db.query(__import__("app.models", fromlist=["Finding"]).Finding).filter_by(
+        id=finding_id
+    ).update({"source_ref": "B608"})
+    client.db.commit()
+
+    body = client.post(f"/findings/{finding_id}/analyze").json()
+
+    assert "<knowledge>" in model["user"] and "</knowledge>" in model["user"]
+    assert "CWE-89" in model["user"]
+    assert [s["id"] for s in body["sources"]] == ["CWE-89", "A03"]
+    assert body["kb_version"]
+
+
+def test_sources_are_the_retrievers_not_the_models(client, model):
+    """A model asked to list its sources produces plausible ones. These are the
+    passages that were actually in the request, so a citation is a record of
+    what happened rather than a claim about it."""
+    client.login_as("alice")
+    model["reply"]["cwe"] = "CWE-99999"          # the answer names something invented
+    finding_id = client.post("/findings", json=_payload(title="Toplantı notu")).json()["id"]
+
+    body = client.post(f"/findings/{finding_id}/analyze").json()
+
+    # Nothing matched, so nothing is cited — the model's own CWE does not
+    # become a source.
+    assert body["sources"] == []
+    assert body["kb_version"] == ""
+    assert "<knowledge>" not in model["user"]
+
+
+def test_retrieval_failing_does_not_take_the_analysis_with_it(client, model, monkeypatch):
+    """A lookup breaking is not a reason to refuse an analysis the user asked
+    for — but the answer must not then imply that sources were used."""
+    import app.ai as ai_module
+
+    def boom(finding, limit=3):
+        raise RuntimeError("index unavailable")
+
+    monkeypatch.setattr(ai_module, "retrieve", boom)
+    client.login_as("alice")
+    finding = client.post("/findings", json=_payload()).json()
+
+    body = client.post(f"/findings/{finding['id']}/analyze").json()
+
+    assert body["suggested_severity"] == "critical"   # the analysis still happened
+    assert body["sources"] == []                      # and claims no citation
+    assert client.get(f"/findings/{finding['id']}").json() == finding
+
+
+def test_the_audit_line_records_identifiers_not_passages(client, model):
+    """Enough to answer "what did this analysis get to read", and no prompt
+    text or passage content in a log line."""
+    client.login_as("alice")
+    finding_id = client.post("/findings", json=_payload(title="SQL injection")).json()["id"]
+
+    client.post(f"/findings/{finding_id}/analyze")
+
+    entry = next(e for e in client.get("/audit/me").json() if e["action"] == "analyzed")
+    assert "kaynak" in entry["detail"]
+    assert "Improper Neutralization" not in entry["detail"]

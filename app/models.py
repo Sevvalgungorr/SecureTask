@@ -256,6 +256,18 @@ class AIAnalysis(Base):
     cwe = Column(String(20), nullable=False, server_default="")
     owasp = Column(String(60), nullable=False, server_default="")
 
+    # Which reference passages were in the request, as identifiers only —
+    # "CWE:CWE-89,OWASP:A03". The text lives in app/knowledge/, in one place,
+    # so correcting a passage corrects every analysis that cited it. Copying it
+    # here would freeze whatever was true the day the analysis ran.
+    #
+    # These come from the retriever, never from the answer. A model asked to
+    # list its sources produces plausible ones.
+    sources = Column(String(500), nullable=False, server_default="")
+    # Which body of knowledge produced this reading. Empty when nothing was
+    # retrieved, which is also how "no RAG here" is recorded.
+    kb_version = Column(String(30), nullable=False, server_default="")
+
 
 class Asset(Base):
     """A host this installation is allowed to check.

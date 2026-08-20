@@ -1,0 +1,289 @@
+{
+  "source": "CWE",
+  "note": "MITRE Common Weakness Enumeration. Short, curated entries for the weakness classes the scanners this application reads actually report. Text is written for a model to use as reference, not copied wholesale: each entry says what the weakness is, why it matters, and what fixes it.",
+  "entries": [
+    {
+      "id": "CWE-89",
+      "title": "SQL Injection",
+      "keywords": [
+        "sql",
+        "injection",
+        "query",
+        "sqli",
+        "database",
+        "sqlalchemy",
+        "cursor",
+        "execute",
+        "select",
+        "where"
+      ],
+      "rules": [
+        "B608",
+        "python.lang.security.audit.sql-injection",
+        "sql-injection",
+        "tainted-sql-string"
+      ],
+      "owasp": "A03",
+      "text": "User-controlled input is placed into an SQL statement so that it changes the statement's structure rather than being read as a value. An attacker who controls that input can read or modify data outside the query's intent, and in many databases reach the filesystem or run commands. Exploitability depends on whether the input is reachable from outside and whether the query runs with useful privileges; a query built from an internal constant is not the same risk as one built from a request parameter. The fix is parameterised queries or an ORM's binding: the value travels separately from the statement, so it can never become syntax. Escaping by hand is not equivalent — it has to be right for every database, encoding and context. Least privilege on the database account limits what a successful injection reaches.",
+      "reference": "https://cwe.mitre.org/data/definitions/89.html"
+    },
+    {
+      "id": "CWE-78",
+      "title": "OS Command Injection",
+      "keywords": [
+        "command",
+        "shell",
+        "subprocess",
+        "os.system",
+        "popen",
+        "exec",
+        "injection",
+        "shell=true"
+      ],
+      "rules": [
+        "B602",
+        "B603",
+        "B604",
+        "B605",
+        "B606",
+        "B607",
+        "dangerous-subprocess-use"
+      ],
+      "owasp": "A03",
+      "text": "A command line is assembled from input and handed to a shell, so shell metacharacters in that input start new commands. Reaching this usually means code execution as the application's user, which is the worst outcome on the list. The fix is not to involve a shell: pass the program and its arguments as a list, so the operating system executes exactly one program and the arguments stay arguments. Where a shell is genuinely required, allowlist the input rather than trying to escape it.",
+      "reference": "https://cwe.mitre.org/data/definitions/78.html"
+    },
+    {
+      "id": "CWE-79",
+      "title": "Cross-site Scripting (XSS)",
+      "keywords": [
+        "xss",
+        "innerhtml",
+        "script",
+        "html",
+        "escape",
+        "render",
+        "template",
+        "dom"
+      ],
+      "rules": [
+        "python.django.security.audit.xss",
+        "react-dangerouslysetinnerhtml",
+        "B703"
+      ],
+      "owasp": "A03",
+      "text": "Untrusted text reaches a page in a position where the browser reads it as markup rather than as content, so the attacker's script runs with the victim's session. Stored XSS is worse than reflected because it fires for anyone who views the record. The fix is contextual output encoding, or an API that cannot produce markup at all — assigning textContent instead of innerHTML removes the class rather than filtering it. A Content-Security-Policy without 'unsafe-inline' is a second layer, not a substitute.",
+      "reference": "https://cwe.mitre.org/data/definitions/79.html"
+    },
+    {
+      "id": "CWE-798",
+      "title": "Use of Hard-coded Credentials",
+      "keywords": [
+        "password",
+        "secret",
+        "token",
+        "api key",
+        "credential",
+        "hardcoded",
+        "key"
+      ],
+      "rules": [
+        "B105",
+        "B106",
+        "B107",
+        "generic.secrets.security.detected-generic-secret"
+      ],
+      "owasp": "A07",
+      "text": "A credential is written into source, so everyone with access to the repository has it — including anyone who gains that access later, and anyone reading the history after it is deleted. Rotation is the part people miss: removing the line does not invalidate the credential, and the old value stays valid until it is changed at the system that issued it. Move the value to a secrets manager or environment configuration, rotate the exposed one, and check whether it was ever used from an unexpected place. Scanners flag test fixtures the same way they flag production keys, so triage should establish which this is.",
+      "reference": "https://cwe.mitre.org/data/definitions/798.html"
+    },
+    {
+      "id": "CWE-312",
+      "title": "Cleartext Storage of Sensitive Information",
+      "keywords": [
+        "cleartext",
+        "plaintext",
+        "storage",
+        "password",
+        "secret",
+        "unencrypted"
+      ],
+      "rules": [
+        "B105",
+        "B106"
+      ],
+      "owasp": "A02",
+      "text": "Sensitive data is stored where it can be read without effort — a file, a log, a database column, a configuration entry. The impact is whatever that data unlocks, and it is realised the moment anyone gains read access, which is a much lower bar than exploitation. Passwords should be hashed with a slow, salted algorithm rather than stored at all; other secrets should be encrypted at rest with keys held elsewhere.",
+      "reference": "https://cwe.mitre.org/data/definitions/312.html"
+    },
+    {
+      "id": "CWE-22",
+      "title": "Path Traversal",
+      "keywords": [
+        "path",
+        "traversal",
+        "directory",
+        "file",
+        "open",
+        "read",
+        "../",
+        "filename"
+      ],
+      "rules": [
+        "python.lang.security.audit.path-traversal",
+        "path-traversal-open"
+      ],
+      "owasp": "A01",
+      "text": "A file path is built from input, so sequences like ../ move the read or write outside the directory the code intended. It turns a feature into arbitrary file read or write, which reaches configuration, credentials and keys. Checking the string before resolving it is not enough: resolve the path first, following symlinks, then require the result to sit inside the permitted root. An allowlist of names, or an identifier that maps to a path server-side, avoids the class entirely.",
+      "reference": "https://cwe.mitre.org/data/definitions/22.html"
+    },
+    {
+      "id": "CWE-327",
+      "title": "Use of a Broken or Risky Cryptographic Algorithm",
+      "keywords": [
+        "md5",
+        "sha1",
+        "des",
+        "rc4",
+        "crypto",
+        "hash",
+        "cipher",
+        "algorithm",
+        "weak"
+      ],
+      "rules": [
+        "B303",
+        "B304",
+        "B305",
+        "B324",
+        "python.lang.security.audit.insecure-hash"
+      ],
+      "owasp": "A02",
+      "text": "An algorithm with known weaknesses is used where its strength matters. MD5 and SHA-1 are collision-prone and unsuitable for signatures or integrity claims; DES and RC4 are broken as ciphers. Severity depends entirely on the use: MD5 as a cache key is not a vulnerability, MD5 for a password or a signature is. Use SHA-256 or better for integrity, AES-GCM or ChaCha20-Poly1305 for encryption, and a purpose-built password hash (argon2, scrypt, bcrypt) for passwords.",
+      "reference": "https://cwe.mitre.org/data/definitions/327.html"
+    },
+    {
+      "id": "CWE-330",
+      "title": "Use of Insufficiently Random Values",
+      "keywords": [
+        "random",
+        "prng",
+        "seed",
+        "token",
+        "nonce",
+        "predictable",
+        "uuid"
+      ],
+      "rules": [
+        "B311",
+        "python.lang.security.audit.insecure-random"
+      ],
+      "owasp": "A02",
+      "text": "A value that has to be unguessable is produced by a general-purpose random number generator, which is designed to be fast and reproducible rather than unpredictable. Session identifiers, password reset tokens, CSRF tokens and nonces generated this way can be predicted from observed output. Use the platform's cryptographic source — secrets in Python, crypto.randomBytes in Node — and take the length from the security requirement, not from what looks long enough.",
+      "reference": "https://cwe.mitre.org/data/definitions/330.html"
+    },
+    {
+      "id": "CWE-502",
+      "title": "Deserialization of Untrusted Data",
+      "keywords": [
+        "deserialization",
+        "pickle",
+        "yaml",
+        "marshal",
+        "unserialize",
+        "load"
+      ],
+      "rules": [
+        "B301",
+        "B302",
+        "B506",
+        "python.lang.security.deserialization.pickle"
+      ],
+      "owasp": "A08",
+      "text": "Serialised data from an untrusted source is reconstructed by a format that can instantiate arbitrary objects or call arbitrary code during loading. Python's pickle and yaml.load are the usual examples: reaching them with attacker-controlled bytes is remote code execution, not tampering. Use a data-only format such as JSON, or yaml.safe_load, and validate the shape after parsing. Signing the payload helps only if the key is genuinely out of reach.",
+      "reference": "https://cwe.mitre.org/data/definitions/502.html"
+    },
+    {
+      "id": "CWE-295",
+      "title": "Improper Certificate Validation",
+      "keywords": [
+        "certificate",
+        "tls",
+        "ssl",
+        "verify",
+        "verify=false",
+        "hostname",
+        "trust"
+      ],
+      "rules": [
+        "B501",
+        "B502",
+        "B503",
+        "python.lang.security.audit.insecure-request"
+      ],
+      "owasp": "A02",
+      "text": "A TLS connection is made without checking that the certificate is valid and belongs to the host being addressed, so encryption is present but authentication is not — anyone positioned on the path can read and alter the traffic. Disabling verification is usually a workaround for an expired or self-signed certificate that stayed in the code. Fix the trust chain instead: install the correct CA, or pin the expected certificate where the endpoint is fixed.",
+      "reference": "https://cwe.mitre.org/data/definitions/295.html"
+    },
+    {
+      "id": "CWE-918",
+      "title": "Server-Side Request Forgery (SSRF)",
+      "keywords": [
+        "ssrf",
+        "request",
+        "url",
+        "fetch",
+        "internal",
+        "metadata",
+        "webhook"
+      ],
+      "rules": [
+        "python.lang.security.audit.ssrf",
+        "ssrf-requests"
+      ],
+      "owasp": "A10",
+      "text": "The server makes an outbound request to a destination the user supplies, which turns it into a proxy for the network it sits in — internal services, cloud metadata endpoints, anything reachable from the host but not from outside. Blocking by hostname is not sufficient: names resolve, redirects follow, and an address can be written many ways. Resolve the target and check every returned IP against private, loopback, link-local and reserved ranges, re-check on redirect, and prefer a registered allowlist of destinations over arbitrary URLs.",
+      "reference": "https://cwe.mitre.org/data/definitions/918.html"
+    },
+    {
+      "id": "CWE-117",
+      "title": "Improper Output Neutralization for Logs",
+      "keywords": [
+        "log",
+        "injection",
+        "newline",
+        "crlf",
+        "forge"
+      ],
+      "rules": [
+        "python.lang.security.audit.log-injection"
+      ],
+      "owasp": "A09",
+      "text": "User-controlled text is written to a log without removing line terminators, so an attacker can write what looks like additional log entries. The damage is to the record rather than the system: forged lines mislead an investigation and can be used to hide real activity. Strip or encode CR and LF before writing, and prefer structured logging where the message and its fields stay separate.",
+      "reference": "https://cwe.mitre.org/data/definitions/117.html"
+    },
+    {
+      "id": "CWE-16",
+      "title": "Security Misconfiguration",
+      "keywords": [
+        "header",
+        "configuration",
+        "misconfiguration",
+        "hsts",
+        "csp",
+        "banner",
+        "listing",
+        "default"
+      ],
+      "rules": [
+        "header-strict-transport-security",
+        "header-content-security-policy",
+        "http-server-header",
+        "dir-listing"
+      ],
+      "owasp": "A05",
+      "text": "A component is deployed with settings that leave it weaker than it needs to be: missing security headers, directory listing enabled, verbose version banners, default credentials or debug modes left on. Individually these are rarely exploitable alone; together they lower the cost of every other attack and often reveal what to attack next. Severity should reflect what the specific setting exposes rather than being assumed low.",
+      "reference": "https://cwe.mitre.org/data/definitions/16.html"
+    }
+  ]
+}

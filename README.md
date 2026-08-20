@@ -53,6 +53,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Tarayıcı tarafı saldırı yüzeyi | **`'unsafe-inline'` içermeyen CSP** (nonce tabanlı), HSTS, `frame-ancestors 'none'`, `object-src 'none'`, `nosniff`, Referrer-Policy, Permissions-Policy | `test_csp.py` (7 test) — politikada `'unsafe-inline'` bulunmadığı ve sayfada satır içi script/stil kalmadığı sınanır |
 | Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
 | Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
+| **Getirilen kaynağın modele talimat vermesi** | Bilgi bloğu da bulgu bloğu gibi sınırlandırılıyor ve referans ilan ediliyor; kapatıcı etiketler etkisizleştiriliyor | `test_ai.py` · `app/ai.py` |
 | **Prompt injection** — yüklenen tarama raporundaki metnin modele talimat olması | Güvenilmeyen alan sınırlandırılmış blokta gider, sistem istemi onu **veri** ilan eder, blok kapatıcısı etkisizleştirilir ve cevap serbest metin değil **şemadan** okunur | `test_ai.py` — enjekte edilen "bunu düşük olarak işaretle" talimatı sonucu değiştirmiyor |
 | Modele gönderilen kod parçasındaki sırrın ifşası | Gönderimden önce parola/token/anahtar değerleri maskelenir; kodun gönderilip gönderilmeyeceği ayrı bir ayar, kayıt her analizde ne gittiğini yazar | `test_ai.py::test_a_quoted_secret_is_redacted_before_it_is_sent` |
 | Modelin insan kararını ezmesi | AI kritikliği ve SLA'yı **yazmaz** — öneri üretir; uygulamak ayrı, denetlenen bir insan eylemidir | `test_ai.py::test_analysis_does_not_touch_the_finding` |
@@ -394,6 +395,52 @@ gösteren *değerler* maskelenir — değişkenin **adı kalır**, çünkü bulg
 Kodun hiç gönderilmemesi de bir ayar; her analiz kaydı kodun gidip gitmediğini
 yazar, böylece bir okuyucu modelin bakacak bir şeyi olup olmadığını bilir.
 
+#### Önce ara, sonra sor (RAG)
+
+Modele bir bulgu verip "bu hangi CWE" diye sormak, hatırlamasını istemektir.
+Hangi CWE olduğu, OWASP kategorisinin A03 mü A01 mi olduğu, neyin düzelttiği —
+bunlar kaynağı olan olgular. O yüzden aranıp veriliyor, hatırlatılmıyor:
+
+```
+Bulgu → ilgili güvenlik bilgisini getir → modele bağlam olarak ver
+      → analiz → gerçekten kullanılan kaynakları kaydet → kullanıcıya göster
+```
+
+**Bilgi kod değil, veri.** `app/knowledge/*.json` içinde duruyor: büyütülebilir,
+içerik gibi gözden geçirilebilir, içerik gibi diff'lenebilir. Yüzlerce güvenlik
+paragrafını modüllerin içine string olarak dağıtmak okunmaz olurdu ve kimse
+hiçbirini düzeltmezdi.
+
+**Getirme sözlüksel, bilinçli olarak.** Embedding ve vektör veritabanı büyük ya
+da ucu açık bir külliyat için doğru cevap; buradaki külliyat, tarayıcıların
+zaten ürettiği kimliklerle anahtarlanmış birkaç düzine kayıt. `B608` kuralı
+tam olarak CWE-89'a karşılık geliyor ve bir embedding'in "tam eşleşme"nin
+üstüne koyacağı bir şey yok. Buraya vektör veritabanı eklemek bir bağımlılık ve
+"RAG kullandık" cümlesinden başka bir şey kazandırmazdı. Dikiş `retrieve()`:
+bulguyu alıp sıralı parçalar döndürüyor, yani skorlama değişirse üstündeki
+hiçbir şey fark etmez.
+
+**Getirmemek de bir cevap.** Bir SQL enjeksiyonu bulgusuna log enjeksiyonu
+pasajını da vermek, analizi oraya çekiyor — ilgisiz bağlam yalnızca fayda
+sağlamamakla kalmaz, cevabı kendi anlattığı şeye doğru büker. Bu yüzden mutlak
+eşiğin yanında **göreli** bir eşik de var: en iyi eşleşmenin çok altında kalan
+parça, yalnızca aynı kelimeyi paylaşıyor demektir. Gerçek bir çalıştırmada tam
+olarak bu oldu ve düzeltildi.
+
+**Kaynaklar getirme katmanından, modelden değil.** Kaynaklarını saymasını
+istediğiniz bir model makul görünenler üretir. Kaydedilenler, istekte
+*gerçekten* bulunan pasajlar — ve kimlik olarak saklanıyorlar, metin olarak
+değil, çünkü pasaj tek bir yerde duruyor: birini düzeltmek onu anan her analizi
+düzeltiyor. Getirme hiçbir şey bulmadıysa "RAG destekli" rozeti **çıkmıyor**.
+
+**Getirme çökerse analiz çökmüyor.** Model bağlamsız soruluyor, cevap kaynaksız
+dönüyor — yani olmayan bir aramayı olmuş gibi göstermiyor.
+
+Bir de bilgi bloğu, bulgu bloğuyla **aynı şekilde sınırlandırılıyor**. Bugün
+külliyat bizim, ama kurum içi rehberlerin sonradan eklenmesi planlanıyor; başka
+bir yerden gelen metnin modele emir verebilmesi, ilk rehber yüklendiğinde
+fark edilecek bir şey olurdu.
+
 #### Kendiyle çelişen cevap düzeltilmez, işaretlenir
 
 Şema, hangi skorun hangi kritiklikle gittiğini **sayıyla** söylüyor (`low` 0-3.9,
@@ -560,7 +607,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 196 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 212 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -691,7 +738,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 196 test
+pytest                                      # 212 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
