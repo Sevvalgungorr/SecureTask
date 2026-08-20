@@ -32,6 +32,10 @@
        the only place these hues appear. */
     --sla-warm: #f59e0b;
     --sla-hot: #f97316;
+    /* Parıltının altını: bir ölçüm değil, bir kimlik işareti. Yalnızca AI
+       simgesinin kendisinde görünür — bir çubuğa ya da rozete asla girmez, ki
+       yukarıdaki zaman rampasıyla ("geç kalmış") karışmasın. */
+    --ai-spark: #eab308;
     --sh-sm: 0 1px 2px rgba(24,20,48,.05);
     --sh: 0 2px 6px rgba(24,20,48,.05), 0 16px 34px -18px rgba(70,50,160,.28);
     --sh-lg: 0 8px 20px rgba(24,20,48,.08), 0 30px 60px -28px rgba(70,50,160,.4);
@@ -64,6 +68,7 @@
       /* Lifted for the dark surface; the amber -> orange direction is kept. */
       --sla-warm: #fbbf24;
       --sla-hot: #fb923c;
+      --ai-spark: #facc15;
       --sh-sm: 0 1px 2px rgba(0,0,0,.4);
       --sh: 0 2px 6px rgba(0,0,0,.35), 0 18px 40px -20px rgba(0,0,0,.7);
       --sh-lg: 0 10px 30px rgba(0,0,0,.5), 0 40px 70px -30px rgba(0,0,0,.85);
@@ -171,7 +176,10 @@
   @media (min-width: 900px) {
     li.finding .meta { margin-top: 0; flex-shrink: 0; justify-content: flex-end; }
     li.finding > .body { display: flex; align-items: center; gap: .9rem; flex-wrap: wrap; }
-    li.finding .body > .title-wrap { flex: 1; min-width: 0; }
+    /* min-width: 0 tek başına sütunun sıfıra kadar inmesine izin veriyor;
+       satıra ikinci bir hap düğme eklenince başlık harf harf sarıldı. Taban
+       genişlik, başlığın hâlâ başlık gibi okunmasını sağlıyor. */
+    li.finding .body > .title-wrap { flex: 1 1 14rem; min-width: 12rem; }
     /* Kanıt bloğu ve zaman çubuğu kendi satırlarını alır. Kardeş olarak
        kalsalardı esnek kutu onları en dar hâllerine sıkıştırırdı: kod harf
        harf sarılır, çubuk da okunamayacak kadar kısalırdı. */
@@ -390,7 +398,9 @@
     display: flex; align-items: flex-start; justify-content: space-between; gap: .8rem;
     padding: 1.1rem 1.2rem; border-bottom: 1px solid var(--line-2);
   }
-  .drawer-head h2 { margin: 0; font-size: .95rem; }
+  .drawer-head h2 { margin: 0; font-size: .95rem; display: flex; align-items: center; gap: .4rem; }
+  .drawer-head h2 .ai-mark { display: inline-flex; color: var(--ai-spark); }
+  .drawer-head h2 .ai-mark svg { width: 16px; height: 16px; display: block; }
   .drawer-sub { margin: .25rem 0 0; font-size: .8rem; color: var(--muted); }
   .drawer-body { padding: 1.1rem 1.2rem 2rem; overflow-y: auto; }
 
@@ -422,16 +432,128 @@
   }
   /* Analiz düğmesi. Etiketli ve vurgu renginde: bir başlık özelliği,
      düzenle/sil ikonlarının arasında çıplak bir sembol olarak bulunamıyor. */
-  .ai-btn {
-    display: inline-flex; align-items: center; gap: .3rem; flex-shrink: 0;
-    color: var(--accent); border-color: color-mix(in srgb, var(--accent) 35%, var(--line));
-    font-variant-numeric: tabular-nums;
+  /* Orta boy bir hap düğme: kalem ve çöp kutusu ikonlarından belirgin, bulgu
+     başlığından sessiz. Satırın konusu bulgunun kendisi; bu, onun hakkında
+     yapılabilecek bir şey.
+
+     `.btn.ai-btn`, yalnızca `.ai-btn` değil: `.btn.ghost` iki sınıf eşleşiyor
+     ve rengi `--muted`e çekiyor, tek sınıflı bir kural onu yenemiyor. */
+  .btn.ai-btn {
+    display: inline-flex; align-items: center; gap: .38rem; flex-shrink: 0;
+    padding: .44rem .85rem; font-size: .84rem; font-weight: 700;
+    border-radius: 999px;                     /* hap */
+    color: var(--accent); background: var(--accent-soft);
+    border: 1px solid color-mix(in srgb, var(--accent) 22%, transparent);
+    box-shadow: none; font-variant-numeric: tabular-nums;
   }
-  .ai-btn .ai-mark { font-size: .9rem; line-height: 1; }
-  .ai-btn:hover { background: var(--accent-soft); }
-  /* Analiz edilmiş satır skorunu taşıyor: listede hangi bulguya bakıldığı,
-     tıklamadan görünüyor. */
-  .ai-btn.analyzed { background: var(--accent-soft); font-weight: 700; }
+  .btn.ai-btn:hover {
+    color: var(--accent); transform: translateY(-1px);
+    background: color-mix(in srgb, var(--accent) 16%, transparent);
+    border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow: 0 6px 14px -8px var(--accent);
+  }
+  .btn.ai-btn .ai-mark { display: inline-flex; color: var(--ai-spark); }
+  .btn.ai-btn .ai-mark svg { width: 16px; height: 16px; display: block; }
+  /* Analiz edilmiş satır skorunu taşıyor: hangi bulguya bakıldığı listede,
+     tıklamadan görünüyor. Biraz daha koyu çerçeve — dolu bir rozet gibi. */
+  .btn.ai-btn.analyzed {
+    border-color: color-mix(in srgb, var(--accent) 45%, transparent);
+    background: color-mix(in srgb, var(--accent) 13%, transparent);
+  }
+  /* Dar ekranda sıfat ve skor düşüyor, parıltı ile "AI" kalıyor: düğmenin ne
+     olduğunu söyleyen onlar, gerisi yer bulunca geliyor. */
+  @media (max-width: 720px) {
+    .btn.ai-btn .ai-word { display: none; }
+    .btn.ai-btn { padding: .44rem .7rem; }
+  }
+
+  /* --- Kod görüntüleyici ---------------------------------------------------
+     Buradaki kodun tamamı raporun getirdiği metin; hiçbir dosya okunmuyor.
+     Görüntüleyici AI panelinden geniş, çünkü konusu satırlar — dar bir sütunda
+     kod sarılır ve satır numarası anlamını yitirir. */
+  .drawer.code-drawer { width: min(720px, 96vw); }
+  .code-head-text h2 {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .88rem; word-break: break-all;
+  }
+  /* Bulgu özeti: kartın tamamı burada tekrarlanmıyor, yalnızca kodu okurken
+     gereken alanlar. */
+  .code-facts {
+    display: grid; grid-template-columns: auto 1fr; gap: .25rem .9rem;
+    margin: 0; padding: .9rem 1.2rem; border-bottom: 1px solid var(--line-2);
+    font-size: .78rem;
+  }
+  .code-facts dt { color: var(--faint); }
+  .code-facts dd { margin: 0; color: var(--ink); font-weight: 600; word-break: break-word; }
+  /* Kendi sınıf adları: `sev-medium` yeniden kullanılsaydı rozetin arka planını
+     da miras alır, kritiklik satırı tam genişlik boyalı bir şerit olurdu.
+     Bu dosyada üçüncü kez aynı tuzak — `.empty`, `.btn.ghost` ve şimdi bu. */
+  .code-facts dd.sv { font-weight: 800; }
+  .code-facts dd.sv-low { color: var(--sev-1); }
+  .code-facts dd.sv-medium { color: var(--sev-2); }
+  .code-facts dd.sv-high { color: var(--sev-3); }
+  .code-facts dd.sv-critical { color: var(--sev-4); }
+
+  .code-scroll {
+    flex: 1; overflow: auto; padding: .8rem 0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: .78rem; line-height: 1.65;
+    background: color-mix(in srgb, var(--ink) 3%, transparent);
+  }
+  .cline, .cnote { display: flex; gap: .9rem; padding: 0 1.1rem; white-space: pre; }
+  .cline .g, .cnote .g {
+    flex: 0 0 3.2rem; text-align: right; color: var(--faint);
+    user-select: none; font-variant-numeric: tabular-nums;
+  }
+  .cline .t, .cnote .t { flex: 1; min-width: 0; }
+  /* İşaretli satır. Renk tek başına bilgi taşımıyor: solda bir şerit var ve
+     altındaki satır kritikliği ve bulgu adını yazıyla söylüyor. */
+  .cline.hit {
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
+    box-shadow: inset 3px 0 0 var(--danger);
+  }
+  .cline.hit .g { color: var(--danger); font-weight: 800; }
+  .cnote { color: var(--danger); font-weight: 700; white-space: normal; padding-bottom: .3rem; }
+  /* Bağlam diskten geldiğinde: bilgi, uyarı değil. */
+  .code-note {
+    margin: .8rem 1.1rem 0; font-size: .74rem; line-height: 1.5; color: var(--muted);
+    font-family: system-ui, sans-serif;
+    border-left: 2px solid var(--accent); padding-left: .7rem;
+  }
+  .code-warn {
+    margin: .8rem 1.1rem 0; font-size: .74rem; line-height: 1.5; color: var(--muted);
+    font-family: system-ui, sans-serif;
+    border-left: 2px solid var(--sla-warm); padding-left: .7rem;
+  }
+
+  /* Sözdizimi renkleri. Kritiklik ve zaman rampalarının dışında kalıyorlar:
+     kod, bir durum yüzeyi değil. */
+  .code-scroll .t-k { color: var(--accent); font-weight: 600; }
+  .code-scroll .t-s { color: var(--ok); }
+  .code-scroll .t-c { color: var(--faint); font-style: italic; }
+  .code-scroll .t-n { color: var(--sla-hot); }
+
+  .code-foot { padding: .9rem 1.2rem; border-top: 1px solid var(--line-2); }
+  .code-foot .btn { width: 100%; justify-content: center; }
+
+  /* Satırdaki aksiyon: AI hapının yanında, ondan sessiz — kodu açmak bir
+     gezinme, analiz ise bir iş. */
+  .btn.code-btn {
+    display: inline-flex; align-items: center; gap: .35rem; flex-shrink: 0;
+    padding: .44rem .8rem; font-size: .82rem; font-weight: 600;
+    border-radius: 999px; box-shadow: none;
+    color: var(--muted); background: transparent; border: 1px solid var(--line);
+  }
+  .btn.code-btn:hover {
+    color: var(--ink); background: var(--line-2); transform: translateY(-1px);
+    border-color: color-mix(in srgb, var(--ink) 18%, var(--line));
+  }
+  .btn.code-btn .code-mark { display: inline-flex; color: var(--accent); }
+  .btn.code-btn .code-mark svg { width: 15px; height: 15px; display: block; }
+  .btn.code-btn .code-where { color: var(--faint); font-variant-numeric: tabular-nums; }
+  @media (max-width: 720px) {
+    .btn.code-btn .code-where { display: none; }
+  }
 
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
@@ -532,7 +654,7 @@
     border: 1px solid var(--accent); border-radius: 8px; padding: .22rem .5rem; outline: none;
   }
 
-  .actions { display: flex; gap: .1rem; align-items: center; flex-shrink: 0; }
+  .actions { display: flex; gap: .35rem; align-items: center; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; }
   .icon-btn {
     background: transparent; border: none; cursor: pointer; color: var(--faint);
     border-radius: 9px; padding: .4rem; display: grid; place-items: center;

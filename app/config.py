@@ -104,6 +104,22 @@ MONITOR_ALLOW_PRIVATE = os.getenv("MONITOR_ALLOW_PRIVATE", "false").lower() == "
 # finding, not a reason to hold the request open.
 MONITOR_TIMEOUT_SECONDS = float(os.getenv("MONITOR_TIMEOUT_SECONDS", "8"))
 
+# --- Reading source for the code viewer ---------------------------------------
+#
+# A working tree this installation may read, so a finding can be shown in the
+# context the report did not carry. Empty by default: unset means the feature
+# does not exist, which is the right default for something that opens files.
+#
+# The path in a finding comes out of an uploaded SARIF, so it is written by
+# whoever wrote the report. This value is the fence around that — see
+# app/source.py for the four checks and why the last one matters most.
+SOURCE_ROOT = os.getenv("SOURCE_ROOT", "")
+
+# Lines either side of the flagged one. Enough to see the statement it belongs
+# to; not so much that the endpoint becomes a way to read a file a page at a
+# time.
+SOURCE_CONTEXT_LINES = int(os.getenv("SOURCE_CONTEXT_LINES", "5"))
+
 # --- AI analysis -------------------------------------------------------------
 #
 # A model reads a finding and says how exploitable it looks, what it would cost,
