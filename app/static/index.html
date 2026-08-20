@@ -384,6 +384,23 @@
   </section>
 </main>
 
+<!-- Kod görüntüleyici. Yalnızca kaynak kod konumu olan (SAST) bulgular için
+     açılır; ağ taramasından gelen bir bulguda gösterilecek kod yoktur ve
+     uydurulmaz. İçindeki her satır raporun kendi getirdiği metin. -->
+<div class="drawer-veil hidden" id="codeVeil"></div>
+<aside class="drawer code-drawer hidden" id="codeDrawer" aria-labelledby="codeTitle" role="dialog" aria-modal="true">
+  <div class="drawer-head">
+    <div class="code-head-text">
+      <h2 id="codeTitle"></h2>
+      <p class="drawer-sub" id="codeSub"></p>
+    </div>
+    <button class="icon-btn" id="codeClose" type="button" title="Kapat" aria-label="Kapat">✕</button>
+  </div>
+  <dl class="code-facts" id="codeFacts"></dl>
+  <div class="code-scroll" id="codeScroll"></div>
+  <div class="code-foot" id="codeFoot"></div>
+</aside>
+
 <!-- AI analiz paneli. Sağdan açılır: bulgu listesi yerinde kalsın, panel de
      onun yerine geçmek yerine yanında dursun. Bu bir öneri, bulgunun kendisi
      değil — kapatınca liste olduğu gibi kalır. -->

@@ -114,20 +114,32 @@ Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmı�
 kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
 denetim günlüğüne bir özet satırı bırakır.
 
-#### Bulgunun altındaki kod
+#### Kod görüntüleyici
 
 "`app/reports.py` · satır 24" bir referanstır: değerlendirmek için depoyu açıp
 dosyayı bulmak ve 24. satıra kadar saymak gerekir. Kimse bunu her bulgu için
 yapmaz, o yüzden liste kural adına bakılarak triyaj edilir — kural adı da
-bulgunun en az güvenilir parçasıdır. Bulgunun altında kodun kendisi durursa
-karar, kararın verildiği yerde verilebilir.
+bulgunun en az güvenilir parçasıdır.
 
-```
-▾ kod — app/reports.py:24
-    23 |
-  > 24 |     return db.execute(text(f"SELECT count(*) FROM {table}")).scalar_one()
-    25 |
-```
+Kaynak kod konumu olan bulgularda satırda bir **Kodu görüntüle** aksiyonu var;
+açtığı görüntüleyici kodu satır numaralarıyla, sözdizimi renklendirmesiyle ve
+işaretli satır kırmızı vurguyla gösteriyor, açılırken o satıra kaydırıyor.
+
+![Kod görüntüleyici](docs/images/code-viewer.png)
+
+Renklendirme kütüphanesiz ve `innerHTML`'siz: her parça kendi `<span>`'ine
+`textContent` ile yazılıyor, yani kod hiçbir noktada işaretleme olarak
+ayrıştırılmıyor. Kırmızı tek başına bilgi taşımıyor — işaretli satırın solunda
+bir şerit, altında da kritikliği ve bulgu adını yazan bir satır var.
+
+Ağ taramasından (nuclei) gelen bulgularda kaynak kod satırı yoktur; orada düğme
+**hiç çıkmaz**. Sahte bir kod görünümü üretmektense göstermemek doğru.
+
+**İşaretli satır her zaman blokta olmayabilir.** Bandit, çok satırlı bir çağrıda
+`region`'ı çağrının başına, `contextRegion`'ı kusurlu argümanın etrafına
+koyabiliyor; ikisi iç içe geçmiyor. O zaman görüntüleyici kırmızı bir satır
+uydurmuyor — kodu gösteriyor ve neden vurgulanamadığını yazıyor. Çizilemeyen bir
+vurguyu sessizce yutmak, yanlış satırı işaretlemekten daha az fark edilir olurdu.
 
 Satırlar raporun kendisinden gelir: SARIF `region.snippet` taşır, çoğu zaman
 etrafında daha geniş bir `contextRegion.snippet` ile birlikte. **Hiçbir şey

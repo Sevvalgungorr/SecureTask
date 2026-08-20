@@ -105,6 +105,7 @@ const CAL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-w
 // Parıltı: büyük bir dört köşeli yıldız ve yanında küçüğü. Diğerlerinin
 // aksine dolu çiziliyor — ince çizgili bir yıldız bu boyutta bulanıklaşıyor.
 // currentColor sayesinde düğmenin vurgu rengini alıyor.
+const BRACKETS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l-5 6 5 6M15 6l5 6-5 6"/></svg>';
 const SPARK = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 2.5l1.7 4.8 4.8 1.7-4.8 1.7L11 15.5 9.3 10.7 4.5 9l4.8-1.7z"/><path d="M18 14l.85 2.4 2.4.85-2.4.85L18 20.5l-.85-2.4-2.4-.85 2.4-.85z"/></svg>';
 const SEV_LABEL = { low: "Düşük", medium: "Orta", high: "Yüksek", critical: "Kritik" };
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
@@ -203,6 +204,185 @@ function barEl(kind, pct, text, icon) {
 }
 
 const doneBar = (text, late) => barEl(late ? "done-late" : "done", 1, text, false);
+
+// --- Kod görüntüleyici ------------------------------------------------------
+//
+// Buradaki kodun tamamı raporun kendi getirdiği metin. Hiçbir dosya okunmuyor:
+// bulgunun `asset` alanı yüklenen bir SARIF'ten geliyor, yani saldırganın
+// yazabildiği bir yol. Sunucunun onu açıp okuması, bu uygulamanın izlemede
+// zaten reddettiği şeyin dosya sistemi hâli olurdu — `../../etc/passwd` ya da
+// `.env` yazan bir rapor, keyfi dosya okuma demek. Elimizde ne varsa o
+// gösteriliyor; olmayan satır uydurulmuyor.
+
+// Sözdizimi renklendirme, kütüphanesiz ve `innerHTML`'siz. Kod güvenilmeyen
+// metin: her parça `textContent` ile kendi <span>'ine yazılıyor, yani
+// renklendirme hiçbir noktada kodu işaretleme olarak ayrıştırmıyor.
+const CODE_KEYWORDS = {
+  py: new Set(("def class return if elif else for while import from as try except finally "
+    + "with lambda yield raise pass break continue and or not in is None True False global "
+    + "nonlocal assert del await async self").split(" ")),
+  js: new Set(("function return if else for while const let var new class extends import "
+    + "from export default try catch finally throw typeof instanceof null undefined true "
+    + "false async await this delete of in").split(" ")),
+};
+
+function codeLang(path) {
+  const ext = (path || "").split(".").pop().toLowerCase();
+  if (ext === "js" || ext === "ts" || ext === "jsx" || ext === "tsx") return "js";
+  return "py";
+}
+
+// Satır satır ayrıştırılıyor. Üç tırnaklı bir dize birden çok satıra yayılırsa
+// eksik boyanır — birkaç satırlık bir parçada bunun bedeli, durum taşıyan bir
+// ayrıştırıcının karmaşıklığından düşük.
+function tokenize(line, lang) {
+  const kw = CODE_KEYWORDS[lang] || CODE_KEYWORDS.py;
+  const re = /(#[^\n]*|\/\/[^\n]*)|("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')|(\b\d[\w.]*)|([A-Za-z_]\w*)/g;
+  const out = [];
+  let last = 0, m;
+
+  while ((m = re.exec(line)) !== null) {
+    if (m.index > last) out.push(["", line.slice(last, m.index)]);
+    if (m[1]) out.push(["t-c", m[1]]);
+    else if (m[2]) out.push(["t-s", m[2]]);
+    else if (m[3]) out.push(["t-n", m[3]]);
+    else out.push([kw.has(m[4]) ? "t-k" : "", m[4]]);
+    last = m.index + m[0].length;
+  }
+
+  if (last < line.length) out.push(["", line.slice(last)]);
+  return out;
+}
+
+function codeLineEl(text, lang) {
+  const holder = document.createElement("span");
+  holder.className = "t";
+  tokenize(text, lang).forEach(([cls, part]) => {
+    const span = document.createElement("span");
+    if (cls) span.className = cls;
+    span.textContent = part;          // kod asla işaretleme olarak basılmıyor
+    holder.appendChild(span);
+  });
+  return holder;
+}
+
+function factRow(dl, label, value) {
+  if (!value) return;
+  const dt = document.createElement("dt");
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.textContent = value;
+  dl.append(dt, dd);
+}
+
+function closeCodeViewer() {
+  document.getElementById("codeDrawer").classList.add("hidden");
+  document.getElementById("codeVeil").classList.add("hidden");
+}
+
+async function openCodeViewer(f) {
+  const lines = f.evidence.replace(/\n$/, "").split("\n");
+  const start = f.evidence_start || f.evidence_line || 1;
+  const end = start + lines.length - 1;
+  const flagged = f.evidence_line;
+  // Bandit gibi araçlar çok satırlı bir çağrıda `region`'ı çağrının başına,
+  // `contextRegion`'ı kusurlu argümanın etrafına koyabiliyor; ikisi iç içe
+  // geçmeyebiliyor. O zaman vurgulanacak satır elimizdeki bloğun dışında
+  // kalıyor — çizilmeyen bir vurguyu sessizce yutmak yerine söylüyoruz.
+  const inBlock = flagged && flagged >= start && flagged <= end;
+
+  document.getElementById("codeTitle").textContent = f.asset || "kaynak";
+  document.getElementById("codeSub").textContent =
+    `satır ${start}–${end}` + (flagged ? ` · bulgu satırı ${flagged}` : "");
+
+  const facts = document.getElementById("codeFacts");
+  facts.innerHTML = "";
+  factRow(facts, "Bulgu", f.title);
+  factRow(facts, "Kritiklik", SEV_LABEL[f.severity] || f.severity);
+  factRow(facts, "Tarayıcı", (f.source || "").toUpperCase());
+  factRow(facts, "Kural", f.source_ref);
+  facts.querySelectorAll("dd")[1].className = "sv sv-" + f.severity;
+
+  const host = document.getElementById("codeScroll");
+  host.innerHTML = "";
+  const lang = codeLang(f.asset);
+  let target = null;
+
+  lines.forEach((text, i) => {
+    const no = start + i;
+    const row = document.createElement("div");
+    row.className = "cline" + (no === flagged ? " hit" : "");
+    const gutter = document.createElement("span");
+    gutter.className = "g";
+    gutter.textContent = no;
+    row.append(gutter, codeLineEl(text, lang));
+    host.appendChild(row);
+
+    if (no === flagged) {
+      target = row;
+      // Uyarı, işaretli satırın hemen altında: rengin ne anlama geldiğini
+      // yazıyla da söylüyor, çünkü renk tek başına bilgi taşımamalı.
+      const note = document.createElement("div");
+      note.className = "cnote";
+      const arrow = document.createElement("span");
+      arrow.className = "g";
+      arrow.textContent = "↳";
+      const what = document.createElement("span");
+      what.className = "t";
+      what.textContent = `${SEV_LABEL[f.severity] || f.severity} · ${f.title}`;
+      note.append(arrow, what);
+      host.appendChild(note);
+    }
+  });
+
+  if (!inBlock && flagged) {
+    const warn = document.createElement("p");
+    warn.className = "code-warn";
+    warn.textContent =
+      `Tarayıcı ${flagged}. satırı işaretledi ama raporun getirdiği blok `
+      + `${start}–${end} arasını kapsıyor; ikisi örtüşmediği için satır `
+      + `vurgulanamadı. Bu, çok satırlı bir çağrıda bandit'in davranışı.`;
+    host.appendChild(warn);
+  }
+
+  renderCodeFoot(f);
+  document.getElementById("codeDrawer").classList.remove("hidden");
+  document.getElementById("codeVeil").classList.remove("hidden");
+  document.getElementById("codeClose").focus();
+  if (target) target.scrollIntoView({ block: "center" });
+
+  // CWE/OWASP yalnızca bir analiz varsa biliniyor — onları üreten model.
+  if (aiScores[f.id]) {
+    try {
+      const a = await api(`/findings/${f.id}/analysis`);
+      factRow(facts, "CWE", a.cwe);
+      factRow(facts, "OWASP", a.owasp);
+    } catch (e) { /* analiz silinmiş olabilir */ }
+  }
+}
+
+// Alt bardaki AI aksiyonu. Sıfırdan ikinci bir sistem değil: mevcut paneli ve
+// mevcut uçları açıyor.
+function renderCodeFoot(f) {
+  const foot = document.getElementById("codeFoot");
+  foot.innerHTML = "";
+
+  if (!aiProviderInfo || !aiProviderInfo.configured) return;
+
+  const done = aiScores[f.id];
+  const btn = document.createElement("button");
+  btn.className = "btn ai-btn" + (done ? " analyzed" : "");
+  btn.type = "button";
+  const mark = document.createElement("span");
+  mark.className = "ai-mark";
+  mark.innerHTML = SPARK;              // static icon markup only
+  btn.appendChild(mark);
+  btn.appendChild(document.createTextNode(
+    done ? `AI Risk · ${done.risk_score.toFixed(1)}` : "AI ile Analiz Et"
+  ));
+  btn.onclick = () => { closeCodeViewer(); analyzeFinding(f, false); };
+  foot.appendChild(btn);
+}
 
 // --- AI analiz paneli -------------------------------------------------------
 //
@@ -522,40 +702,30 @@ function askAcceptance(f) {
 
 // Raporun getirdiği kod parçası. Kod bizde durmuyor — depo hiç klonlanmıyor —
 // bu satırlar taramanın kendi raporundan geliyor.
-function evidenceBlock(f) {
+// Kaynak kod konumu olan bulgular için "Kodu görüntüle". Ağ taramasından
+// gelen bir bulguda kod yoktur, düğme de çıkmaz — sahte bir kod görünümü
+// üretmektense hiç göstermemek doğru.
+function codeButton(f) {
   if (!f.evidence) return null;
 
-  const lines = f.evidence.replace(/\n$/, "").split("\n");
-  const start = f.evidence_start || f.evidence_line || 1;
-
-  const box = document.createElement("details");
-  box.className = "evidence";
-  const summary = document.createElement("summary");
-  summary.textContent = f.evidence_line
-    ? `kod — ${f.asset}:${f.evidence_line}`
-    : `kod — ${f.asset}`;
-  box.appendChild(summary);
-
-  const pre = document.createElement("div");
-  pre.className = "code";
-  lines.forEach((text, i) => {
-    const no = start + i;
-    const row = document.createElement("div");
-    row.className = "ln" + (no === f.evidence_line ? " hit" : "");
-    const n = document.createElement("span");
-    n.className = "n";
-    n.textContent = no;
-    const t = document.createElement("span");
-    // textContent: bu, birinin deposundan gelen metin. innerHTML olsaydı bir
-    // tarama raporu bu uygulamaya script sokabilirdi.
-    t.textContent = text;
-    row.append(n, t);
-    pre.appendChild(row);
-  });
-  box.appendChild(pre);
-
-  return box;
+  const btn = document.createElement("button");
+  btn.className = "btn code-btn";
+  btn.type = "button";
+  const line = f.evidence_line ? `:${f.evidence_line}` : "";
+  btn.title = `${f.asset}${line} — kodu görüntüle`;
+  const mark = document.createElement("span");
+  mark.className = "code-mark";
+  mark.innerHTML = BRACKETS;          // static icon markup only
+  btn.appendChild(mark);
+  btn.appendChild(document.createTextNode("Kodu görüntüle"));
+  const where = document.createElement("span");
+  where.className = "code-where";
+  where.textContent = line;
+  btn.appendChild(where);
+  btn.onclick = () => openCodeViewer(f);
+  return btn;
 }
+
 
 // The row's own status control. Changing it PUTs the finding, so the change
 // lands in the audit log the same way any other edit does.
@@ -665,8 +835,6 @@ function findingRow(f) {
   body.appendChild(findingMeta(f));
   const clock = slaBar(f);
   if (clock) body.appendChild(clock);
-  const code = evidenceBlock(f);
-  if (code) body.appendChild(code);
   if (f.status === "accepted_risk" && f.accepted_reason) {
     const note = document.createElement("div");
     note.className = "accepted-note";
@@ -683,6 +851,8 @@ function findingRow(f) {
   // Yalnızca sağlayıcı yapılandırılmışsa. Yoksa düğme hiç görünmez —
   // basıldığında "yapılandırılmamış" diyen bir düğme, olmayan bir düğmeden
   // daha kötüdür.
+  const code = codeButton(f);
+  if (code) actions.appendChild(code);
   if (aiProviderInfo && aiProviderInfo.configured) {
     const done = aiScores[f.id];
     const ai = document.createElement("button");
@@ -1782,9 +1952,13 @@ function renderRiskList(open) {
 document.getElementById("riskClear").onclick = () => { riskCell = null; renderRisk(); };
 
 document.getElementById("aiTitleMark").innerHTML = SPARK;   // static icon markup
+document.getElementById("codeClose").onclick = closeCodeViewer;
+document.getElementById("codeVeil").onclick = closeCodeViewer;
 document.getElementById("aiClose").onclick = closeAiDrawer;
 document.getElementById("aiVeil").onclick = closeAiDrawer;
-addEventListener("keydown", e => { if (e.key === "Escape") closeAiDrawer(); });
+addEventListener("keydown", e => {
+  if (e.key === "Escape") { closeAiDrawer(); closeCodeViewer(); }
+});
 
 // Güvenlik sekmesindeki sağlayıcı bölümü. Uç nokta ve model *gösterilir*,
 // yazılamaz: kullanıcının girdiği bir adrese sunucunun — üstelik API anahtarı
