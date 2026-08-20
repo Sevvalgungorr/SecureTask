@@ -394,9 +394,14 @@ def test_the_list_learns_which_findings_were_analysed(client, model):
     assert [r["finding_id"] for r in rows] == [analysed]
     assert rows[0]["risk_score"] == 8.5
     assert rows[0]["suggested_severity"] == "critical"
-    # Summary only: the reasoning is worth its own request, and sending a page
-    # of prose per row to draw one badge is not.
-    assert set(rows[0]) == {"finding_id", "risk_score", "suggested_severity", "confidence"}
+    # Summary only: enough to rank and compare, not the reasoning. That stays
+    # behind its own request — a page of prose per row is not what the list or
+    # the analyst page is drawing.
+    assert set(rows[0]) == {
+        "finding_id", "risk_score", "suggested_severity", "confidence",
+        "exploitability", "suggested_sla_hours", "cwe", "created_at",
+    }
+    assert "summary" not in rows[0] and "remediation" not in rows[0]
 
 
 def test_the_summary_list_respects_who_may_see_what(client, model):

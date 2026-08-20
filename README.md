@@ -421,6 +421,51 @@ Mimarinin değeri burada: daha iyi bir modele geçmek `.env`'de tek satır.
 `AI_PROVIDER=anthropic` yapılır. Uygulamanın hiçbir yeri değişmez, çünkü model
 zaten bir görüş bildiriyor — karar vermiyor.
 
+#### AI Analyst: önce neye bakmalıyım
+
+Tek tek analizler bulgunun yanında duruyor. Hepsine birden bakınca çıkan soru
+başka: **bu listede önce neye bakmalıyım.** `AI Analyst` sekmesi yalnızca onu
+yanıtlıyor.
+
+![AI Analyst](docs/images/ai-analyst.png)
+
+Bulgularım'ın ya da Risk'in kopyası değil, ve olmaması bilinçli:
+
+| Sayfa | Sorusu |
+| --- | --- |
+| Bulgularım | Ne bulundu, kim ilgileniyor, ne zamana kadar |
+| Risk | Kritiklik ve yaş birlikte nerede birikiyor |
+| **AI Analyst** | **Model ne diyor, nerede insanla ayrışıyor, neye güvenilmez** |
+
+Bu yüzden burada bulgu kartı da yok, risk matrisi de. Öncelik kartları kompakt:
+ad, AI skoru, sömürülebilirlik, modelin güveni, önerilen süre. Dosya yolu,
+tarayıcı çıktısı ve kod parçası Bulgularım'ın işi.
+
+Bir karta tıklamak **mevcut AI Güvenlik Analizi çekmecesini** açıyor — ikinci
+bir detay paneli yazılmadı.
+
+##### Sayfanın asıl söylediği şey
+
+En değerli satır, modelin skoruyla kayıtlı kritikliğin **ayrıştığı** yer:
+tarayıcı "düşük" demiş, model 8.2 vermişse biri yanlış ve buna bir insan
+bakmalı. Uygulamanın başka hiçbir yeri bunu söyleyemiyor — ve bir dil modelinin
+en savunulabilir kullanımı da bu: otorite değil, **karşılaştırma**.
+
+Modelin kendi güveni ayrı bir rozet. Düşük güvenli bir okuma "manuel inceleme
+önerilir" etiketi taşıyor ve "yüksek öncelikli" sayısına **girmiyor** — düşük
+güvenle verilmiş bir 9, öncelik değil, doğrulanacak bir iddiadır.
+
+##### İçgörüler uydurulmuyor
+
+Hepsi saklanmış kayıtların aritmetiği: kaç analizde güven düşük, kaçında AI
+kayıtlı kritiklikten farklı düşünüyor, AI'ın önerdiği süre kayıtlı SLA'dan kısa
+mı, aynı CWE birden çok analizde geçiyor mu, ve **hiç analiz edilmemiş açık
+kritik/yüksek bulgu var mı**. Çıkarılamıyorsa yazılmıyor — ekranı doldurmak
+için modele bir şey sordurulmuyor.
+
+Sayfa açılırken **modele hiçbir istek gitmiyor**. Her şey `/ai/analyses`'in
+döndürdüğü özetten ve zaten bellekte olan bulgu listesinden hesaplanıyor.
+
 #### Öneri, karar değil
 
 AI kritikliği yazmaz, SLA kurmaz. Ürettiği her değer `suggested_*` adını taşır
@@ -499,6 +544,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - 🎯 **Kritiklik ve SLA** — `low` / `medium` / `high` / `critical`; tarih verilmezse kritikliğe göre hesaplanır (7 / 14 / 30 / 90 gün)
 - ⏱️ **SLA zaman çubuğu** — her bulgunun altında penceresinin ne kadarının harcandığı; kapananlarda süresinde mi geç mi kapandığı, kabul edilen riskte geri sayım
 - 🎛️ **Risk matrisi** — kritiklik × yaş ızgarası kendi sekmesinde; hücreye tıklayınca içindeki bulgular hemen altında açılır
+- ✦ **AI Analyst sayfası** — tüm AI değerlendirmelerini önceliklendirir; modelin insanla ayrıştığı yeri, düşük güvenli okumaları ve hiç analiz edilmemiş yüksek kritiklikleri gösterir
 - ✦ **AI güvenlik analisti** — bulguyu model okur: sömürülebilirlik, etki, çözüm, CWE/OWASP; sağlayıcıdan bağımsız (self-hosted varsayılan), prompt injection'a karşı korumalı, ve ürettiği her değer **öneri** olarak kalır
 - 🔁 **Durum akışı** — Açık → Triyaj → Düzeltildi **veya** Risk kabul (ikisi de kapatır, ikisi ayrı şeydir)
 - 👥 **Ekip ve atama** — bulgu bir ekibe ait olur, ekipteki herkes görür, biri üstlenir; kimin ilgilendiği listede yazar
