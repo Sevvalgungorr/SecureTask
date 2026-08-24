@@ -226,7 +226,140 @@ def test_scans_are_scoped_to_who_ran_them(client, analyser):
 
 def test_starting_a_scan_is_recorded(client, analyser):
     client.login_as("alice")
-    client.post("/scan?project=demo")
+    scan = client.post("/scan?project=demo").json()
 
     entry = next(e for e in client.get("/audit/me").json() if e["action"] == "scanned")
     assert "demo" in entry["detail"] and "bandit" in entry["detail"]
+
+    # Waited for on purpose: the scan runs on a daemon thread with its own
+    # session, and the next test's fixture drops the schema. Leaving it in
+    # flight means a thread writing to tables that no longer exist — which is
+    # exactly the warning this test produced before the wait was added.
+    _wait(client, scan["id"])
+
+
+# --- NEW / EXISTING / RESOLVED ------------------------------------------------
+
+
+def _sarif(*rules):
+    return json.dumps({
+        "version": "2.1.0",
+        "runs": [{
+            "tool": {"driver": {"name": "Bandit"}},
+            "results": [{
+                "ruleId": rule,
+                "level": "warning",
+                "message": {"text": f"finding {rule}"},
+                "locations": [{"physicalLocation": {
+                    "artifactLocation": {"uri": f"app/{rule.lower()}.py"},
+                    "region": {"startLine": 3, "snippet": {"text": "x = 1"}},
+                }}],
+            } for rule in rules],
+        }],
+    })
+
+
+def test_a_rescan_splits_into_new_existing_and_resolved(client, analyser):
+    """First run finds A, B, C; second finds B, C, D. D is new, B and C carry
+    on, and A is closed because this scan covered the tree it lives in and did
+    not report it."""
+    client.login_as("alice")
+    analyser["sarif"] = _sarif("B101", "B102", "B103")
+    first = _wait(client, client.post("/scan?project=demo").json()["id"])
+
+    assert (first["created"], first["unchanged"], first["resolved"]) == (3, 0, 0)
+
+    analyser["sarif"] = _sarif("B102", "B103", "B104")
+    second = _wait(client, client.post("/scan?project=demo").json()["id"])
+
+    assert second["created"] == 1        # B104
+    assert second["unchanged"] == 2      # B102, B103
+    assert second["resolved"] == 1       # B101
+
+    by_rule = {f["source_ref"]: f for f in client.get("/findings").json()}
+    assert by_rule["B101"]["status"] == "fixed"
+    assert by_rule["B102"]["status"] == "open"
+    assert by_rule["B104"]["status"] == "open"
+
+
+def test_resolving_does_not_touch_an_accepted_risk(client, analyser):
+    """Someone argued for it, with a second factor and an expiry. A scanner not
+    mentioning the file this time is not an argument against that."""
+    from datetime import date, timedelta
+
+    client.login_as("alice", amr=["otp"])
+    analyser["sarif"] = _sarif("B101")
+    _wait(client, client.post("/scan?project=demo").json()["id"])
+    finding = client.get("/findings").json()[0]
+    client.put(f"/findings/{finding['id']}", json={
+        **{k: finding[k] for k in
+           ("title", "description", "asset", "severity", "team_id", "due_date")},
+        "status": "accepted_risk",
+        "accepted_reason": "Sağlayıcı yaması çıkana kadar sınırlandırıldı",
+        "accepted_until": str(date.today() + timedelta(days=30)),
+    })
+
+    analyser["sarif"] = _sarif("B102")
+    run = _wait(client, client.post("/scan?project=demo").json()["id"])
+
+    assert run["resolved"] == 0
+    assert client.get(f"/findings/{finding['id']}").json()["status"] == "accepted_risk"
+
+
+def test_only_the_tree_the_scan_covered_is_resolved(client, analyser, monkeypatch):
+    """A bandit report uploaded from an unrelated repository must not be closed
+    by a scan that never looked at it."""
+    client.login_as("alice")
+    client.post(
+        "/import/sarif",
+        content=json.dumps({
+            "version": "2.1.0",
+            "runs": [{
+                "tool": {"driver": {"name": "Bandit"}},
+                "results": [{
+                    "ruleId": "B999",
+                    "level": "warning",
+                    "message": {"text": "elsewhere"},
+                    "locations": [{"physicalLocation": {
+                        "artifactLocation": {"uri": "otherrepo/thing.py"},
+                        "region": {"startLine": 1, "snippet": {"text": "y = 2"}},
+                    }}],
+                }],
+            }],
+        }),
+        headers={"content-type": "application/json"},
+    )
+
+    analyser["sarif"] = _sarif("B101")
+    run = _wait(client, client.post("/scan?project=demo").json()["id"])
+
+    assert run["resolved"] == 0
+    outside = next(f for f in client.get("/findings").json() if f["source_ref"] == "B999")
+    assert outside["status"] == "open"
+
+
+def test_a_run_records_how_long_it_took(client, analyser):
+    client.login_as("alice")
+
+    run = _wait(client, client.post("/scan?project=demo").json()["id"])
+
+    assert run["duration"] is not None and run["duration"] >= 0
+
+
+def test_the_options_endpoint_reports_what_is_configured(client, analyser):
+    """The dropdowns are empty when this says they should be, and never
+    because a failure was swallowed."""
+    client.login_as("alice")
+
+    body = client.get("/scan/options").json()
+
+    assert [p["name"] for p in body["projects"]] == ["demo"]
+    assert body["projects"][0]["available"] is True
+    assert [s["key"] for s in body["scanners"]] == ["bandit"]
+
+
+def test_options_are_honest_when_nothing_is_configured(client, monkeypatch):
+    monkeypatch.setattr(scanner, "SCAN_PROJECTS", {})
+    client.login_as("alice")
+
+    assert client.get("/scan/options").json()["projects"] == []

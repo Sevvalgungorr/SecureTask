@@ -2399,6 +2399,15 @@ function renderAnalyst() {
 // yolundan geçiyor, mevcut tekilleştirmeyle. Bu sayfa yalnızca taramayı
 // başlatıyor ve nasıl gittiğini gösteriyor.
 
+// Saniye altı bir tarama "0 sn" diye görünmesin: gerçekten ne kadar sürdüğü,
+// aracın ne kadar hızlı olduğunu anlatan bilgi.
+function fmtDuration(seconds) {
+  if (seconds == null) return "";
+  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)} sn`;
+  return `${Math.floor(seconds / 60)} dk ${Math.round(seconds % 60)} sn`;
+}
+
 const SCAN_LABEL = {
   queued: "sırada", running: "çalışıyor", completed: "tamamlandı", failed: "başarısız",
 };
@@ -2416,7 +2425,8 @@ function scanRow(run) {
   sub.textContent = run.error
     ? run.error
     : run.status === "completed"
-      ? `${run.total} sonuç · ${run.created} yeni · ${run.reopened} yeniden açıldı · ${run.unchanged} değişmedi`
+      ? `${run.total} bulgu · +${run.created} yeni · =${run.unchanged} devam ediyor`
+        + ` · ✓${run.resolved} çözüldü` + (run.duration ? ` · ${fmtDuration(run.duration)}` : "")
       : SCAN_LABEL[run.status] || run.status;
   left.append(when, sub);
 
@@ -2463,21 +2473,56 @@ function renderLatest(run) {
     return;
   }
 
-  stat("Toplam sonuç", String(run.total));
-  stat("Yeni bulgu", String(run.created), run.created ? "hot" : "");
-  stat("Yeniden açılan", String(run.reopened));
-  stat("Değişmeyen", String(run.unchanged));
+  stat("Bulgu", String(run.total));
+  stat("Yeni", String(run.created), run.created ? "hot" : "");
+  stat("Devam ediyor", String(run.unchanged));
+  // Bu taramanın artık görmediği için kapattıkları. Ayrı bir sayı, çünkü
+  // "düzelmiş" ile "hâlâ duruyor" aynı şey değil.
+  stat("Çözüldü", String(run.resolved), run.resolved ? "good" : "");
+  if (run.reopened) stat("Yeniden açılan", String(run.reopened), "hot");
+  stat("Süre", fmtDuration(run.duration) || "—");
 
+  const actions = document.createElement("div");
+  actions.className = "scan-actions";
   const go = document.createElement("button");
-  go.className = "btn sm scan-go";
+  go.className = "btn sm";
   go.type = "button";
   go.textContent = "Bulguları gör";
   go.onclick = () => document.querySelector('.tab[data-view="my"]').click();
-  host.appendChild(go);
+  const again = document.createElement("button");
+  again.className = "btn ghost sm";
+  again.type = "button";
+  again.textContent = "Yeniden tara";
+  again.onclick = () => document.getElementById("scanStart").click();
+  actions.append(go, again);
+  host.appendChild(actions);
+}
+
+function scanUnavailable(message) {
+  const warn = document.getElementById("scanWarn");
+  warn.classList.remove("hidden");
+  warn.textContent = message;
+  document.getElementById("scanStart").disabled = true;
+  document.getElementById("scanProject").innerHTML = "";
+  document.getElementById("scanScanner").innerHTML = "";
 }
 
 async function loadScans() {
-  const opts = await api("/scan/options");
+  // Hata yutulmuyor. Boş bir açılır liste, sebebini söylemeyen bir arıza —
+  // ve tam olarak bu oldu: uç 404 dönüyordu, catch onu yutuyordu, ekranda
+  // yalnızca boşluk vardı.
+  let opts;
+
+  try {
+    opts = await api("/scan/options");
+  } catch (e) {
+    scanUnavailable(
+      "Tarama servisine ulaşılamadı: " + e.message
+      + " — sunucu bu özelliği tanımıyorsa yeniden başlatılması gerekebilir."
+    );
+    return;
+  }
+
   const projectSel = document.getElementById("scanProject");
   const scannerSel = document.getElementById("scanScanner");
   const warn = document.getElementById("scanWarn");
@@ -2493,6 +2538,9 @@ async function loadScans() {
   });
 
   scannerSel.innerHTML = "";
+  // Tek tarayıcı varken açılır liste bir seçim sunmuyor; seçili ve kilitli
+  // durması, olmayan bir tercihi varmış gibi göstermekten dürüst.
+  scannerSel.disabled = opts.scanners.length < 2;
   opts.scanners.forEach(sc => {
     const o = document.createElement("option");
     o.value = sc.key;
@@ -2510,8 +2558,11 @@ async function loadScans() {
 
   if (!usable) {
     warn.textContent = !opts.projects.length
-      ? "Taranabilir proje tanımlı değil. Kurulum: .env içinde SCAN_PROJECTS."
-      : "Seçilebilir bir tarayıcı yok — bu makinede kurulu değil.";
+      ? "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
+        + "SCAN_PROJECTS=ad=/yol tanımlanmalı."
+      : !opts.projects.some(p => p.available)
+        ? "Yapılandırılmış projenin dizini sunucuda bulunamadı."
+        : "Bandit kullanılamıyor — bu makinede kurulu değil.";
   }
 
   const runs = await api("/scan");
@@ -2523,6 +2574,9 @@ async function loadScans() {
   // Süren bir tarama varsa bitene kadar izle. Bittiğinde bulgular da
   // tazeleniyor, çünkü listeye yeni satırlar düşmüş olabilir.
   const live = runs.find(r => r.status === "queued" || r.status === "running");
+  // Süren tarama varken başlatma düğmesi ne durumda olduğunu söylüyor.
+  start.textContent = live ? "Taranıyor…" : "Taramayı başlat";
+  if (live) start.disabled = true;
   clearTimeout(scanPoll);
   if (live) scanPoll = setTimeout(() => loadScans().catch(() => {}), 1500);
   else if (runs[0] && runs[0].status === "completed") loadFindings().catch(() => {});

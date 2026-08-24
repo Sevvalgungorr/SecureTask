@@ -300,6 +300,10 @@ class ScanRun(Base):
     created = Column(Integer, nullable=False, server_default="0")
     reopened = Column(Integer, nullable=False, server_default="0")
     unchanged = Column(Integer, nullable=False, server_default="0")
+    # Findings this scan no longer reports, closed because the scan covered
+    # the tree they live in. See _resolve_stale() for why that qualifier is
+    # doing real work.
+    resolved = Column(Integer, nullable=False, server_default="0")
     total = Column(Integer, nullable=False, server_default="0")
     # Why it failed, in words a person can act on. Empty on success.
     error = Column(String(400), nullable=False, server_default="")

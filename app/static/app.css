@@ -758,7 +758,8 @@
   .scan-stat .s-lbl { font-size: .72rem; color: var(--faint); font-weight: 700; }
   .scan-stat b { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
   .scan-stat.hot b { color: var(--accent); }
-  .scan-go { flex: 0 0 auto; align-self: center; }
+  .scan-actions { display: flex; gap: .5rem; align-items: center; flex: 0 0 auto; align-self: center; }
+  .scan-stat.good b { color: var(--ok); }
   .scan-error { margin: 0; font-size: .84rem; color: var(--danger); }
 
   .scan-history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }

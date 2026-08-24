@@ -1548,9 +1548,70 @@ def _scan_view(row: ScanRun) -> dict:
         "created": row.created,
         "reopened": row.reopened,
         "unchanged": row.unchanged,
+        "resolved": row.resolved,
         "total": row.total,
+        # Süre satırdan türetiliyor, ayrı bir kolon tutulmuyor: iki zaman
+        # damgası zaten var ve ikisinin farkı her zaman doğru.
+        "duration": (
+            (row.finished_at - row.started_at).total_seconds()
+            if row.finished_at else None
+        ),
         "error": row.error or "",
     }
+
+
+def _resolve_stale(db, user, tool: str, results: list) -> int:
+    """Close findings this scan covered but no longer reports.
+
+    This is the RESOLVED half of a re-scan, and it is only sound because *we*
+    ran the scan and know what it looked at. An uploaded report is different:
+    someone may have scanned one directory and sent the result, and closing
+    everything it failed to mention would silently mark unexamined code as
+    fixed. That is why this lives in the scan flow and not in `_ingest()`.
+
+    Even here it is scoped rather than global. Only findings from the same
+    scanner, belonging to this caller, sitting under a top-level directory this
+    run actually reported on, are eligible — so a bandit report uploaded from
+    an unrelated repository is not closed by a scan that never saw it.
+
+    An accepted risk is never touched. Someone argued for it, with a second
+    factor and an expiry; a scanner not mentioning the file this time is not
+    an argument against that.
+    """
+    seen = {(r.asset, r.source_ref) for r in results}
+    # The parts of the tree this run reported on, by first path segment.
+    covered = {r.asset.split("/", 1)[0] for r in results if r.asset}
+
+    if not covered:
+        return 0
+
+    candidates = (
+        db.query(Finding)
+        .filter(
+            Finding.owner_id == user.id,
+            Finding.source == tool,
+            Finding.status.in_(("open", "triaged")),
+        )
+        .all()
+    )
+
+    closed = 0
+
+    for finding in candidates:
+        if (finding.asset, finding.source_ref) in seen:
+            continue
+
+        if finding.asset.split("/", 1)[0] not in covered:
+            continue
+
+        finding.status = "fixed"
+        _record_audit(
+            db, user, "updated", finding.id,
+            f"{finding.title} · status open→fixed · tarama artık görmüyor",
+        )
+        closed += 1
+
+    return closed
 
 
 def _run_scan(scan_id: int, user_id: int, team_id: int | None,
@@ -1597,11 +1658,13 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
             return
 
         counts = _ingest(db, user, team_id, results, tool or scanner_key, skipped)
+        resolved = _resolve_stale(db, user, tool or scanner_key, results)
 
         row.status = "completed"
         row.created = counts.get("created", 0)
         row.reopened = counts.get("reopened", 0)
         row.unchanged = counts.get("unchanged", 0)
+        row.resolved = resolved
         row.total = len(results)
         row.finished_at = datetime.now(timezone.utc)
         db.commit()

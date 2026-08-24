@@ -139,6 +139,30 @@ bir ayrıştırıcı yok; `_ingest()` aynı tekilleştirmeyi yapıyor, yani yeni
 bulgu mantığı yok. Bu deponun ikinci taraması **0 yeni · 8 değişmedi** dedi —
 kopya üretmedi.
 
+##### Yeniden tarama: yeni, devam eden, çözülen
+
+İkinci tarama öncekiyle karşılaştırılıyor — ayrı bir eşleştirme yazılmadan,
+mevcut `(sahip, dosya, kural)` kimliğiyle:
+
+```
+1. tarama: A B C      2. tarama: B C D
+                      → D yeni · B,C devam ediyor · A çözüldü
+```
+
+**Çözülen kısmı yalnızca burada güvenli.** Taramayı *biz* çalıştırdık, yani
+neye baktığını biliyoruz. Yüklenen bir rapor farklı: biri tek bir dizini tarayıp
+sonucu göndermiş olabilir ve raporda geçmeyen her şeyi kapatmak, hiç bakılmamış
+kodu düzelmiş gibi işaretlemek olurdu. Bu yüzden bu mantık `_ingest()`'te değil,
+tarama akışında duruyor.
+
+Burada bile kapsamlı: yalnızca aynı tarayıcıdan gelen, bu koşunun **gerçekten
+raporladığı** üst dizin altındaki bulgular kapanabiliyor. Başka bir depodan
+yüklenmiş bir bandit raporu, onu hiç görmemiş bir taramayla kapanmıyor.
+
+Ve **risk kabulüne dokunulmuyor.** Biri onu ikinci faktörle, gerekçeyle ve
+bitiş tarihiyle savundu; tarayıcının bu sefer o dosyadan söz etmemesi buna karşı
+bir argüman değil.
+
 ##### Üç şey yapmıyor
 
 **Analiz edilen kodu çalıştırmıyor.** Bandit Python'ı söz dizimi ağacına
@@ -667,7 +691,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 224 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 230 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -798,7 +822,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 224 test
+pytest                                      # 230 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
