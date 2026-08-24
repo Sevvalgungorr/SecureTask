@@ -1541,6 +1541,7 @@ def _scan_view(row: ScanRun) -> dict:
     return {
         "id": row.id,
         "project": row.project,
+        "kind": row.kind,
         "scanner": row.scanner,
         "status": row.status,
         "started_at": row.started_at,
@@ -1647,7 +1648,14 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
         # emits SARIF, so there is nothing new to parse and nothing new to
         # decide: same deduplication, same "a scan may not overwrite a
         # judgement" rule, same audit line.
-        results, skipped, tool = parse_sarif(result.sarif)
+        # The reader that already exists for whatever this scanner emits.
+        # Bandit writes SARIF, nuclei writes JSONL, and both formats were
+        # already understood here — neither needed a new parser.
+        if scanner_key == "nuclei":
+            results, skipped = parse_nuclei(result.sarif)
+            tool = "nuclei"
+        else:
+            results, skipped, tool = parse_sarif(result.sarif)
         user = db.query(User).filter(User.id == user_id).one_or_none()
 
         if user is None:
@@ -1688,7 +1696,11 @@ def scan_options(user: User = Depends(get_current_user)):
     Behind authentication: which projects an installation has registered is
     not something to tell an anonymous caller.
     """
-    return {"projects": scanner.projects(), "scanners": scanner.scanners()}
+    return {
+        "projects": scanner.projects(),
+        "targets": scanner.targets(),
+        "scanners": scanner.scanners(),
+    }
 
 
 @app.post("/scan")
@@ -1713,15 +1725,34 @@ def start_scan(
     if team_id is not None:
         _require_membership(db, user, team_id)
 
-    if project not in scanner.SCAN_PROJECTS:
-        raise HTTPException(status_code=404, detail="Böyle bir proje tanımlı değil.")
+    spec = scanner.SCANNERS.get(scanner_key)
+
+    if spec is None:
+        raise HTTPException(status_code=404, detail="Böyle bir tarayıcı tanımlı değil.")
+
+    kind = spec.get("kind", scanner.SAST)
+    # A name, resolved server-side against configuration. Whether it becomes a
+    # directory or a URL depends on the scanner, but in neither case does the
+    # request carry the thing that gets opened or connected to.
+    registry = scanner.DAST_TARGETS if kind == scanner.DAST else scanner.SCAN_PROJECTS
+
+    if project not in registry:
+        raise HTTPException(
+            status_code=404,
+            detail="Böyle bir hedef tanımlı değil." if kind == scanner.DAST
+            else "Böyle bir proje tanımlı değil.",
+        )
 
     # One at a time per project. Two analysers writing findings for the same
     # tree at once produce a race over the deduplication, and the second run
     # tells nobody anything the first will not.
     busy = (
         db.query(ScanRun)
-        .filter(ScanRun.project == project, ScanRun.status.in_(("queued", "running")))
+        .filter(
+            ScanRun.project == project,
+            ScanRun.kind == kind,
+            ScanRun.status.in_(("queued", "running")),
+        )
         .first()
     )
 
@@ -1732,7 +1763,7 @@ def start_scan(
         )
 
     row = ScanRun(
-        project=project, scanner=scanner_key, status="queued",
+        project=project, kind=kind, scanner=scanner_key, status="queued",
         owner_id=user.id, team_id=team_id,
     )
     db.add(row)
@@ -1741,7 +1772,7 @@ def start_scan(
 
     _record_audit(
         db, user, "scanned", None,
-        f"SAST başlatıldı · {project} · {scanner_key}",
+        f"{kind.upper()} başlatıldı · {project} · {scanner_key}",
     )
 
     threading.Thread(

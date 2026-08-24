@@ -104,6 +104,46 @@ MONITOR_ALLOW_PRIVATE = os.getenv("MONITOR_ALLOW_PRIVATE", "false").lower() == "
 # finding, not a reason to hold the request open.
 MONITOR_TIMEOUT_SECONDS = float(os.getenv("MONITOR_TIMEOUT_SECONDS", "8"))
 
+# --- DAST targets -------------------------------------------------------------
+#
+# Running applications this installation may scan, as "name=url;name=url".
+# Empty by default, and deliberately harder to fill in than the SAST list:
+# static analysis reads files, dynamic analysis sends live traffic at something
+# that is running.
+#
+# The request names a *target*; the URL comes from here. A URL in a request is
+# the shape of an SSRF, and this application already refuses that for
+# monitoring — a scanner is the same problem with a louder voice.
+#
+# Test and staging only. There is no production flag and no way to mark one:
+# an installation that wants to scan production has to write the URL in here
+# deliberately, and that is a decision with a name on it.
+def _targets(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+
+    for part in raw.split(";"):
+        name, _, url = part.partition("=")
+        name, url = name.strip(), url.strip()
+
+        # Only http(s). A scanner handed file:// or gopher:// is a different
+        # kind of tool than the one being configured here.
+        if name and url.startswith(("http://", "https://")):
+            out[name] = url
+
+    return out
+
+
+DAST_TARGETS = _targets(os.getenv("DAST_TARGETS", ""))
+
+# A dynamic scan talks to something over a network, so it is slower than
+# reading files and needs a longer leash — but still a leash.
+DAST_TIMEOUT_SECONDS = float(os.getenv("DAST_TIMEOUT_SECONDS", "900"))
+
+# Requests per second and parallel templates. Low on purpose: this is a check
+# against a test system, not a load test of it.
+DAST_RATE_LIMIT = int(os.getenv("DAST_RATE_LIMIT", "20"))
+DAST_CONCURRENCY = int(os.getenv("DAST_CONCURRENCY", "10"))
+
 # --- Reading source for the code viewer ---------------------------------------
 #
 # A working tree this installation may read, so a finding can be shown in the

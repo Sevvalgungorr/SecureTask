@@ -742,6 +742,12 @@
      bulgu listesine düşüyor. Buradaki tek iş taramayı başlatmak ve nasıl
      gittiğini göstermek. */
   .scan-lead { margin: 0 .25rem 1rem; }
+  /* Basılamayan bir düğme basılabilir gibi durmamalı — kullanıcı denemeden
+     önce görmeli. */
+  .btn:disabled, .btn:disabled:hover {
+    opacity: .45; cursor: not-allowed; transform: none; filter: none;
+    box-shadow: none;
+  }
   .scan-form { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; }
   .scan-field { display: flex; flex-direction: column; gap: .3rem; }
   .scan-field > span { font-size: .74rem; color: var(--faint); font-weight: 700; }

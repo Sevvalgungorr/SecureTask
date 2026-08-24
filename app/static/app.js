@@ -2413,6 +2413,30 @@ const SCAN_LABEL = {
 };
 
 let scanPoll = null;
+// Hangi tarama türüne bakılıyor. Sayfa aynı sayfa; değişen, hangi kaydın
+// listeleneceği ve neyin seçileceği.
+let scanKind = "sast";
+
+const SCAN_KIND = {
+  sast: {
+    title: "Statik kod analizi",
+    label: "Proje",
+    lead: "Kayıtlı bir projenin kaynak kodunu tarar. Kod <çalıştırılmaz> — "
+      + "analiz aracı onu söz dizimi ağacına çevirip okur.",
+    button: "Taramayı başlat",
+    empty: "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
+      + "SCAN_PROJECTS=ad=/yol tanımlanmalı.",
+  },
+  dast: {
+    title: "Dinamik uygulama analizi",
+    label: "Hedef",
+    lead: "Çalışan bir test/staging uygulamasını kontrollü olarak tarar. "
+      + "Hedef listesi sunucuda tanımlıdır; buradan adres girilemez.",
+    button: "DAST taramasını başlat",
+    empty: "Henüz taranabilir hedef yapılandırılmamış. Sunucuda .env içinde "
+      + "DAST_TARGETS=ad=https://... tanımlanmalı.",
+  },
+};
 
 function scanRow(run) {
   const li = document.createElement("li");
@@ -2527,12 +2551,27 @@ async function loadScans() {
   const scannerSel = document.getElementById("scanScanner");
   const warn = document.getElementById("scanWarn");
   const start = document.getElementById("scanStart");
+  const conf = SCAN_KIND[scanKind];
+
+  document.getElementById("scanTitle").textContent = conf.title;
+  document.getElementById("scanTargetLabel").textContent = conf.label;
+  document.getElementById("scanLead").textContent = conf.lead;
+  document.getElementById("kindSast").classList.toggle("active", scanKind === "sast");
+  document.getElementById("kindDast").classList.toggle("active", scanKind === "dast");
+
+  // DAST'ta hedefler her zaman "erişilebilir": sunucunun ağdan ulaşıp
+  // ulaşamadığını denemeden bilemeyiz, ve denemek zaten taramanın kendisi.
+  const entries = scanKind === "dast"
+    ? (opts.targets || []).map(t => ({ name: t.name, note: t.url, available: true }))
+    : opts.projects.map(p => ({ name: p.name, note: "", available: p.available }));
 
   projectSel.innerHTML = "";
-  opts.projects.forEach(p => {
+  entries.forEach(p => {
     const o = document.createElement("option");
     o.value = p.name;
-    o.textContent = p.available ? p.name : `${p.name} (dizin yok)`;
+    o.textContent = p.available
+      ? (p.note ? `${p.name} — ${p.note}` : p.name)
+      : `${p.name} (dizin yok)`;
     o.disabled = !p.available;
     projectSel.appendChild(o);
   });
@@ -2540,32 +2579,37 @@ async function loadScans() {
   scannerSel.innerHTML = "";
   // Tek tarayıcı varken açılır liste bir seçim sunmuyor; seçili ve kilitli
   // durması, olmayan bir tercihi varmış gibi göstermekten dürüst.
-  scannerSel.disabled = opts.scanners.length < 2;
-  opts.scanners.forEach(sc => {
+  const usableScanners = opts.scanners.filter(sc => sc.kind === scanKind);
+  scannerSel.disabled = usableScanners.length < 2;
+  usableScanners.forEach(sc => {
     const o = document.createElement("option");
     o.value = sc.key;
     o.textContent = sc.installed ? sc.label : `${sc.label} (kurulu değil)`;
-    o.disabled = !sc.installed;
+    // Tek seçenek varken onu da devre dışı bırakmak kutuyu boş gösteriyordu:
+    // seçilemeyen tek seçenek, hiç seçenek gibi çiziliyor. Kutunun kendisi
+    // zaten kilitli; adı görünmeli ki hangi aracın kastedildiği belli olsun.
+    o.disabled = !sc.installed && usableScanners.length > 1;
     scannerSel.appendChild(o);
   });
 
   // Yapılandırılmamış ya da kurulu olmayan bir şeyi çalışır gibi göstermek
   // yerine neden çalışmadığını söylüyoruz.
-  const usable = opts.projects.some(p => p.available)
-    && opts.scanners.some(sc => sc.installed);
+  const usable = entries.some(p => p.available)
+    && usableScanners.some(sc => sc.installed);
   warn.classList.toggle("hidden", usable);
   start.disabled = !usable;
 
   if (!usable) {
-    warn.textContent = !opts.projects.length
-      ? "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
-        + "SCAN_PROJECTS=ad=/yol tanımlanmalı."
-      : !opts.projects.some(p => p.available)
+    const tool = usableScanners[0];
+    warn.textContent = !entries.length
+      ? conf.empty
+      : !entries.some(p => p.available)
         ? "Yapılandırılmış projenin dizini sunucuda bulunamadı."
-        : "Bandit kullanılamıyor — bu makinede kurulu değil.";
+        : `${tool ? tool.label : "Tarayıcı"} kullanılamıyor — bu makinede kurulu değil.`;
   }
 
-  const runs = await api("/scan");
+  const all = await api("/scan");
+  const runs = all.filter(r => (r.kind || "sast") === scanKind);
   const list = document.getElementById("scanHistory");
   list.innerHTML = "";
   runs.forEach(r => list.appendChild(scanRow(r)));
@@ -2575,12 +2619,19 @@ async function loadScans() {
   // tazeleniyor, çünkü listeye yeni satırlar düşmüş olabilir.
   const live = runs.find(r => r.status === "queued" || r.status === "running");
   // Süren tarama varken başlatma düğmesi ne durumda olduğunu söylüyor.
-  start.textContent = live ? "Taranıyor…" : "Taramayı başlat";
+  start.textContent = live ? "Taranıyor…" : conf.button;
   if (live) start.disabled = true;
   clearTimeout(scanPoll);
   if (live) scanPoll = setTimeout(() => loadScans().catch(() => {}), 1500);
   else if (runs[0] && runs[0].status === "completed") loadFindings().catch(() => {});
 }
+
+document.getElementById("kindSast").onclick = () => {
+  scanKind = "sast"; loadScans().catch(() => {});
+};
+document.getElementById("kindDast").onclick = () => {
+  scanKind = "dast"; loadScans().catch(() => {});
+};
 
 document.getElementById("scanStart").onclick = async (e) => {
   const project = document.getElementById("scanProject").value;

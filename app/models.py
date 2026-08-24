@@ -288,6 +288,10 @@ class ScanRun(Base):
     # The project's registered *name*, not its path. A path in a row invites a
     # later feature to read it back out of the database and use it.
     project = Column(String(80), nullable=False)
+    # "sast" | "dast". One table for both because a run is a run — who started
+    # it, over what, with what outcome. The kind matters for what the row
+    # *means* (a directory or a running system), not for how it is kept.
+    kind = Column(String(10), nullable=False, server_default="sast")
     scanner = Column(String(30), nullable=False, server_default="bandit")
     # queued → running → completed | failed
     status = Column(String(20), nullable=False, server_default="queued")
