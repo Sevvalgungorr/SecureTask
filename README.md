@@ -53,6 +53,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Tarayıcı tarafı saldırı yüzeyi | **`'unsafe-inline'` içermeyen CSP** (nonce tabanlı), HSTS, `frame-ancestors 'none'`, `object-src 'none'`, `nosniff`, Referrer-Policy, Permissions-Policy | `test_csp.py` (7 test) — politikada `'unsafe-inline'` bulunmadığı ve sayfada satır içi script/stil kalmadığı sınanır |
 | Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
 | Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
+| **Taramanın sunucuda keyfi dizin okuması / komut çalıştırması** | İstek proje **adı** gönderiyor, yolu yapılandırmadan geliyor; argümanlar liste, kabuk yok; analiz edilen kod çalıştırılmıyor (AST okunuyor) | `test_scanner.py` (12 test) |
 | **Getirilen kaynağın modele talimat vermesi** | Bilgi bloğu da bulgu bloğu gibi sınırlandırılıyor ve referans ilan ediliyor; kapatıcı etiketler etkisizleştiriliyor | `test_ai.py` · `app/ai.py` |
 | **Prompt injection** — yüklenen tarama raporundaki metnin modele talimat olması | Güvenilmeyen alan sınırlandırılmış blokta gider, sistem istemi onu **veri** ilan eder, blok kapatıcısı etkisizleştirilir ve cevap serbest metin değil **şemadan** okunur | `test_ai.py` — enjekte edilen "bunu düşük olarak işaretle" talimatı sonucu değiştirmiyor |
 | Modele gönderilen kod parçasındaki sırrın ifşası | Gönderimden önce parola/token/anahtar değerleri maskelenir; kodun gönderilip gönderilmeyeceği ayrı bir ayar, kayıt her analizde ne gittiğini yazar | `test_ai.py::test_a_quoted_secret_is_redacted_before_it_is_sent` |
@@ -105,16 +106,99 @@ dosyadır** — ağ taramasında bir ana bilgisayar neyse o: sorunun üzerinde
 yaşadığı şey. Böylece aynı kural aynı dosyada elli kez tetiklense de tek bulgu
 olarak takip edilir.
 
-**Tarama burada çalışmaz.** Rapor, kodun zaten bulunduğu yerde üretilir —
-geliştiricinin makinesinde ya da kendi CI hattında — ve buraya yalnızca
-bulgular gelir. Bir depoyu klonlayıp taramak, güvenilmeyen kodu çalıştırmak ve
-başkasının kaynak kodunu barındırmak demektir; takip aracının bu sorumluluğu
-üstlenmesi için bir sebep yoktur ve bu alandaki ciddi araçların tamamı aynı
-şekilde çalışır.
+Rapor, kodun zaten bulunduğu yerde üretilebilir — geliştiricinin makinesinde
+ya da kendi CI hattında — ve buraya yalnızca bulgular gelir. Bir depoyu
+**klonlayıp** taramak hâlâ kapsam dışı: güvenilmeyen kodu çalıştırmak ve
+başkasının kaynak kodunu barındırmak demektir.
+
+Ama kod **zaten bu makinedeyse** rapor beklemenin bir anlamı yok. Aşağıdaki
+[SAST taraması](#sast-taramasını-buradan-çalıştırmak) tam olarak o durum için:
+kaydedilmiş bir dizin üzerinde statik analiz.
 
 Tek istek en fazla `MAX_RESULTS` (1000) sonuç işler — kimliği doğrulanmış bir
 kullanıcı da veritabanını doldurmanın ucuz bir yolu olmamalı. Her içe aktarma
 denetim günlüğüne bir özet satırı bırakır.
+
+#### SAST taramasını buradan çalıştırmak
+
+Hazır bir SARIF yüklemek yerine, kaydedilmiş bir proje için taramayı doğrudan
+başlatabilirsin.
+
+![Taramalar](docs/images/scans.png)
+
+```
+Proje → SAST başlat → Bandit → SARIF → mevcut ayrıştırıcı → Bulgular
+                                                          → Kod görüntüleyici
+                                                          → AI analizi
+                                                          → Risk + SLA
+```
+
+Sağdaki her şey **zaten vardı**. Yeni olan tek şey soldaki iki kutu: analizi
+çalıştırmak ve çıktısını mevcut yola vermek. Bandit SARIF üretiyor, yani yeni
+bir ayrıştırıcı yok; `_ingest()` aynı tekilleştirmeyi yapıyor, yani yeni bir
+bulgu mantığı yok. Bu deponun ikinci taraması **0 yeni · 8 değişmedi** dedi —
+kopya üretmedi.
+
+##### Yeniden tarama: yeni, devam eden, çözülen
+
+İkinci tarama öncekiyle karşılaştırılıyor — ayrı bir eşleştirme yazılmadan,
+mevcut `(sahip, dosya, kural)` kimliğiyle:
+
+```
+1. tarama: A B C      2. tarama: B C D
+                      → D yeni · B,C devam ediyor · A çözüldü
+```
+
+**Çözülen kısmı yalnızca burada güvenli.** Taramayı *biz* çalıştırdık, yani
+neye baktığını biliyoruz. Yüklenen bir rapor farklı: biri tek bir dizini tarayıp
+sonucu göndermiş olabilir ve raporda geçmeyen her şeyi kapatmak, hiç bakılmamış
+kodu düzelmiş gibi işaretlemek olurdu. Bu yüzden bu mantık `_ingest()`'te değil,
+tarama akışında duruyor.
+
+Burada bile kapsamlı: yalnızca aynı tarayıcıdan gelen, bu koşunun **gerçekten
+raporladığı** üst dizin altındaki bulgular kapanabiliyor. Başka bir depodan
+yüklenmiş bir bandit raporu, onu hiç görmemiş bir taramayla kapanmıyor.
+
+Ve **risk kabulüne dokunulmuyor.** Biri onu ikinci faktörle, gerekçeyle ve
+bitiş tarihiyle savundu; tarayıcının bu sefer o dosyadan söz etmemesi buna karşı
+bir argüman değil.
+
+##### Üç şey yapmıyor
+
+**Analiz edilen kodu çalıştırmıyor.** Bandit Python'ı söz dizimi ağacına
+çevirip okuyor. Proje dizinindeki hiçbir şey import edilmiyor, çalıştırılmıyor.
+Bir depoyu klonlayıp derlemekle arasındaki fark bu.
+
+**Kimseden yol almıyor.** İstek bir **proje adı** gönderiyor; yol
+`SCAN_PROJECTS` yapılandırmasından geliyor. Denenecek bir traversal yok, çünkü
+istekte gidilecek bir yol yok — bu, bir yolu doğrulamaktan daha güçlü bir
+konum. Kayıtlı olmayan ad **404**.
+
+**Komut satırı kurmuyor.** Argümanlar bir liste, kabuk yok. Tırnak,
+metakarakter ve kelime bölme burada geçerli kavramlar değil; `; rm -rf /`
+içeren bir proje adı, kayıtlı olmayan bir addır.
+
+##### Yolda çıkan iki şey
+
+Bandit'in SARIF üreticisi `.venv` içindeki bir dosyada **çöküyordu** (`list
+index out of range`). Ama asıl mesele şu: sanal ortam üçüncü taraf kodu,
+projenin kodu değil. Oradaki bulgular kimsenin düzelteceği şeyler değil ve
+düzeltilebilecekleri gömerdi. `.venv`, `.git`, `node_modules` ve benzerleri
+dışarıda.
+
+İkincisi: `-r` mutlak yolla verilince bandit varlık adına
+`file:///home/kasm-user/...` yazıyordu — sunucunun dosya düzeni her bulguya
+sızıyor, yüklenen raporlarla tekilleştirme tutmuyor ve kod görüntüleyici yolu
+çözemiyordu. Artık `-r .` ve `cwd` projede.
+
+##### Ne kadar sürüyor
+
+Bu depoda **1.3 saniye**, 8 sonuç. Tarama kendi iş parçacığında çalışıyor,
+sayfa `sırada → çalışıyor → tamamlandı` durumunu gösteriyor. Başarısız bir
+koşu da satır bırakıyor: izi olmayan bir tarama, hiç başlatılmamış olandan
+ayırt edilemez.
+
+**DAST ve aktif ağ taraması kapsam dışı.** Bu yalnızca statik analiz.
 
 #### Kod görüntüleyici
 
@@ -607,7 +691,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 212 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 230 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -738,7 +822,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 212 test
+pytest                                      # 230 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```
@@ -762,6 +846,7 @@ Testler ayrı bir `securetask_test` veritabanı kullanır ve kimlik doğrulamay�
 | `PUT` | `/findings/{id}/assignee` | Bearer (ekip üyesi) |
 | `POST` `GET` | `/teams` | Bearer |
 | `POST` `DELETE` | `/teams/{id}/members`, `/teams/{id}/members/{user_id}` | Yalnızca `risk_owner` |
+| `POST` `GET` | `/scan`, `/scan/{id}`, `/scan/options` | Bearer (proje **adı**, yol değil) |
 | `POST` | `/import/nuclei` (`?team_id=`) | Bearer (web tarama raporu) |
 | `POST` | `/import/sarif` (`?team_id=`) | Bearer (kod tarama raporu) |
 | `POST` `GET` `DELETE` | `/assets`, `/assets/{id}` | Bearer (yalnızca sahibi) |
@@ -812,6 +897,7 @@ app/
   monitor.py    # kayıtlı varlık kontrolleri + SSRF koruması
   ai.py         # model sağlayıcı dikişi, prompt sınırlandırma, maskeleme, şema
   source.py     # kod görüntüleyici için kaynak okuma + yol/sürüm kontrolleri
+  scanner.py    # yerel SAST: kayıtlı proje, kabuksuz subprocess, SARIF çıktısı
   schemas.py    # istek/yanıt doğrulama (Pydantic)
   database.py   # veritabanı bağlantısı
   config.py     # ortam ayarları

@@ -75,6 +75,7 @@
       <button class="tab" data-view="my" type="button">Bulgularım</button>
       <button class="tab" data-view="risk" type="button">Risk</button>
       <button class="tab tab-ai" data-view="analyst" type="button"><span class="ai-mark" id="tabMark"></span>AI Analyst</button>
+      <button class="tab" data-view="scans" type="button">Taramalar</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
@@ -313,6 +314,44 @@
         gerektirebilir. Hiçbiri bulgunun kritikliğine, SLA'sına veya durumuna
         kendiliğinden uygulanmaz.
       </p>
+    </div>
+
+    <!-- SAST taramaları. Bulgular ayrı bir yerde tutulmuyor: tarayıcı ne
+         bulursa mevcut bulgu sistemine, mevcut tekilleştirmeyle giriyor. -->
+    <div id="scansView" class="hidden">
+      <div class="admin-block">
+        <div class="list-head">
+          <h2>Statik kod analizi</h2>
+          <span class="badge">SAST</span>
+        </div>
+        <p class="chart-note scan-lead">
+          Kayıtlı bir projenin kaynak kodunu tarar. Kod <b>çalıştırılmaz</b> —
+          analiz aracı onu söz dizimi ağacına çevirip okur. Bulunanlar
+          Bulgularım'a düşer; aynı bulgu ikinci taramada kopyalanmaz.
+        </p>
+        <div class="scan-form">
+          <label class="scan-field">
+            <span>Proje</span>
+            <select id="scanProject" class="mini-select"></select>
+          </label>
+          <label class="scan-field">
+            <span>Tarayıcı</span>
+            <select id="scanScanner" class="mini-select"></select>
+          </label>
+          <button class="btn" id="scanStart" type="button">Taramayı başlat</button>
+        </div>
+        <p class="chart-note scan-warn hidden" id="scanWarn"></p>
+      </div>
+
+      <div class="admin-block hidden" id="scanLatestBlock">
+        <div class="list-head"><h2>Son tarama</h2><span class="badge" id="scanStatus"></span></div>
+        <div class="scan-latest" id="scanLatest"></div>
+      </div>
+
+      <div class="admin-block">
+        <div class="list-head"><h2>Geçmiş</h2><span class="badge">son 10</span></div>
+        <ul class="scan-history" id="scanHistory"></ul>
+      </div>
     </div>
 
     <div id="assetsView" class="hidden">

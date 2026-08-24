@@ -269,6 +269,50 @@ class AIAnalysis(Base):
     kb_version = Column(String(30), nullable=False, server_default="")
 
 
+class ScanRun(Base):
+    """One run of a static analyser over a registered project.
+
+    Kept because a scan is an event with an outcome, not just a way of getting
+    findings: who started it, what it ran over, whether it worked, and what it
+    produced. Without the row a failed scan leaves no trace at all, and "I ran
+    it and nothing happened" has no answer.
+
+    The findings themselves are ordinary findings — there is no separate
+    store for scanner results, because the rules about what a report may do to
+    a decision are the same whether the report was uploaded or produced here.
+    """
+
+    __tablename__ = "scan_runs"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # The project's registered *name*, not its path. A path in a row invites a
+    # later feature to read it back out of the database and use it.
+    project = Column(String(80), nullable=False)
+    scanner = Column(String(30), nullable=False, server_default="bandit")
+    # queued → running → completed | failed
+    status = Column(String(20), nullable=False, server_default="queued")
+    started_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    finished_at = Column(DateTime(timezone=True))
+    # What the import did, so the page can say "5 new, 3 unchanged" rather than
+    # only a total.
+    created = Column(Integer, nullable=False, server_default="0")
+    reopened = Column(Integer, nullable=False, server_default="0")
+    unchanged = Column(Integer, nullable=False, server_default="0")
+    # Findings this scan no longer reports, closed because the scan covered
+    # the tree they live in. See _resolve_stale() for why that qualifier is
+    # doing real work.
+    resolved = Column(Integer, nullable=False, server_default="0")
+    total = Column(Integer, nullable=False, server_default="0")
+    # Why it failed, in words a person can act on. Empty on success.
+    error = Column(String(400), nullable=False, server_default="")
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+
+
 class Asset(Base):
     """A host this installation is allowed to check.
 

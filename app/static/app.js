@@ -2393,7 +2393,209 @@ function renderAnalyst() {
   renderInsights(rows);
 }
 
-const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- SAST taramaları ---------------------------------------------------------
+//
+// Bulgular için ayrı bir sistem yok: tarayıcı ne bulursa mevcut içe aktarma
+// yolundan geçiyor, mevcut tekilleştirmeyle. Bu sayfa yalnızca taramayı
+// başlatıyor ve nasıl gittiğini gösteriyor.
+
+// Saniye altı bir tarama "0 sn" diye görünmesin: gerçekten ne kadar sürdüğü,
+// aracın ne kadar hızlı olduğunu anlatan bilgi.
+function fmtDuration(seconds) {
+  if (seconds == null) return "";
+  if (seconds < 1) return `${Math.round(seconds * 1000)} ms`;
+  if (seconds < 60) return `${seconds.toFixed(1)} sn`;
+  return `${Math.floor(seconds / 60)} dk ${Math.round(seconds % 60)} sn`;
+}
+
+const SCAN_LABEL = {
+  queued: "sırada", running: "çalışıyor", completed: "tamamlandı", failed: "başarısız",
+};
+
+let scanPoll = null;
+
+function scanRow(run) {
+  const li = document.createElement("li");
+  li.className = "scan-item s-" + run.status;
+  const left = document.createElement("div");
+  const when = document.createElement("b");
+  when.textContent = `${run.project} · ${run.scanner}`;
+  const sub = document.createElement("div");
+  sub.className = "scan-sub";
+  sub.textContent = run.error
+    ? run.error
+    : run.status === "completed"
+      ? `${run.total} bulgu · +${run.created} yeni · =${run.unchanged} devam ediyor`
+        + ` · ✓${run.resolved} çözüldü` + (run.duration ? ` · ${fmtDuration(run.duration)}` : "")
+      : SCAN_LABEL[run.status] || run.status;
+  left.append(when, sub);
+
+  const state = document.createElement("span");
+  state.className = "scan-badge b-" + run.status;
+  state.textContent = SCAN_LABEL[run.status] || run.status;
+  li.append(left, state);
+  return li;
+}
+
+function renderLatest(run) {
+  const block = document.getElementById("scanLatestBlock");
+  block.classList.toggle("hidden", !run);
+  if (!run) return;
+
+  document.getElementById("scanStatus").textContent = SCAN_LABEL[run.status] || run.status;
+  const host = document.getElementById("scanLatest");
+  host.innerHTML = "";
+
+  const stat = (label, value, cls) => {
+    const box = document.createElement("div");
+    box.className = "scan-stat" + (cls ? " " + cls : "");
+    const l = document.createElement("span"); l.className = "s-lbl"; l.textContent = label;
+    const v = document.createElement("b"); v.textContent = value;
+    box.append(l, v);
+    host.appendChild(box);
+  };
+
+  if (run.status === "failed") {
+    const err = document.createElement("p");
+    err.className = "scan-error";
+    err.textContent = run.error || "Tarama başarısız oldu.";
+    host.appendChild(err);
+    return;
+  }
+
+  if (run.status !== "completed") {
+    const p = document.createElement("p");
+    p.className = "chart-note";
+    p.textContent = run.status === "queued"
+      ? "Tarama sıraya alındı…"
+      : "Kaynak kod taranıyor…";
+    host.appendChild(p);
+    return;
+  }
+
+  stat("Bulgu", String(run.total));
+  stat("Yeni", String(run.created), run.created ? "hot" : "");
+  stat("Devam ediyor", String(run.unchanged));
+  // Bu taramanın artık görmediği için kapattıkları. Ayrı bir sayı, çünkü
+  // "düzelmiş" ile "hâlâ duruyor" aynı şey değil.
+  stat("Çözüldü", String(run.resolved), run.resolved ? "good" : "");
+  if (run.reopened) stat("Yeniden açılan", String(run.reopened), "hot");
+  stat("Süre", fmtDuration(run.duration) || "—");
+
+  const actions = document.createElement("div");
+  actions.className = "scan-actions";
+  const go = document.createElement("button");
+  go.className = "btn sm";
+  go.type = "button";
+  go.textContent = "Bulguları gör";
+  go.onclick = () => document.querySelector('.tab[data-view="my"]').click();
+  const again = document.createElement("button");
+  again.className = "btn ghost sm";
+  again.type = "button";
+  again.textContent = "Yeniden tara";
+  again.onclick = () => document.getElementById("scanStart").click();
+  actions.append(go, again);
+  host.appendChild(actions);
+}
+
+function scanUnavailable(message) {
+  const warn = document.getElementById("scanWarn");
+  warn.classList.remove("hidden");
+  warn.textContent = message;
+  document.getElementById("scanStart").disabled = true;
+  document.getElementById("scanProject").innerHTML = "";
+  document.getElementById("scanScanner").innerHTML = "";
+}
+
+async function loadScans() {
+  // Hata yutulmuyor. Boş bir açılır liste, sebebini söylemeyen bir arıza —
+  // ve tam olarak bu oldu: uç 404 dönüyordu, catch onu yutuyordu, ekranda
+  // yalnızca boşluk vardı.
+  let opts;
+
+  try {
+    opts = await api("/scan/options");
+  } catch (e) {
+    scanUnavailable(
+      "Tarama servisine ulaşılamadı: " + e.message
+      + " — sunucu bu özelliği tanımıyorsa yeniden başlatılması gerekebilir."
+    );
+    return;
+  }
+
+  const projectSel = document.getElementById("scanProject");
+  const scannerSel = document.getElementById("scanScanner");
+  const warn = document.getElementById("scanWarn");
+  const start = document.getElementById("scanStart");
+
+  projectSel.innerHTML = "";
+  opts.projects.forEach(p => {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.available ? p.name : `${p.name} (dizin yok)`;
+    o.disabled = !p.available;
+    projectSel.appendChild(o);
+  });
+
+  scannerSel.innerHTML = "";
+  // Tek tarayıcı varken açılır liste bir seçim sunmuyor; seçili ve kilitli
+  // durması, olmayan bir tercihi varmış gibi göstermekten dürüst.
+  scannerSel.disabled = opts.scanners.length < 2;
+  opts.scanners.forEach(sc => {
+    const o = document.createElement("option");
+    o.value = sc.key;
+    o.textContent = sc.installed ? sc.label : `${sc.label} (kurulu değil)`;
+    o.disabled = !sc.installed;
+    scannerSel.appendChild(o);
+  });
+
+  // Yapılandırılmamış ya da kurulu olmayan bir şeyi çalışır gibi göstermek
+  // yerine neden çalışmadığını söylüyoruz.
+  const usable = opts.projects.some(p => p.available)
+    && opts.scanners.some(sc => sc.installed);
+  warn.classList.toggle("hidden", usable);
+  start.disabled = !usable;
+
+  if (!usable) {
+    warn.textContent = !opts.projects.length
+      ? "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
+        + "SCAN_PROJECTS=ad=/yol tanımlanmalı."
+      : !opts.projects.some(p => p.available)
+        ? "Yapılandırılmış projenin dizini sunucuda bulunamadı."
+        : "Bandit kullanılamıyor — bu makinede kurulu değil.";
+  }
+
+  const runs = await api("/scan");
+  const list = document.getElementById("scanHistory");
+  list.innerHTML = "";
+  runs.forEach(r => list.appendChild(scanRow(r)));
+  renderLatest(runs[0] || null);
+
+  // Süren bir tarama varsa bitene kadar izle. Bittiğinde bulgular da
+  // tazeleniyor, çünkü listeye yeni satırlar düşmüş olabilir.
+  const live = runs.find(r => r.status === "queued" || r.status === "running");
+  // Süren tarama varken başlatma düğmesi ne durumda olduğunu söylüyor.
+  start.textContent = live ? "Taranıyor…" : "Taramayı başlat";
+  if (live) start.disabled = true;
+  clearTimeout(scanPoll);
+  if (live) scanPoll = setTimeout(() => loadScans().catch(() => {}), 1500);
+  else if (runs[0] && runs[0].status === "completed") loadFindings().catch(() => {});
+}
+
+document.getElementById("scanStart").onclick = async (e) => {
+  const project = document.getElementById("scanProject").value;
+  const scannerKey = document.getElementById("scanScanner").value;
+  e.target.disabled = true;
+  try {
+    await api(`/scan?project=${encodeURIComponent(project)}`
+      + `&scanner_key=${encodeURIComponent(scannerKey)}`, { method: "POST" });
+    toast("Tarama başlatıldı");
+    await loadScans();
+  } catch (err) { toast(err.message); }
+  e.target.disabled = false;
+};
+
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -2415,6 +2617,7 @@ function setupTabs() {
       // bulgularla birlikte geliyor.
       if (v === "analyst") loadFindings().catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
+      if (v === "scans") loadScans().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
