@@ -53,6 +53,7 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Tarayıcı tarafı saldırı yüzeyi | **`'unsafe-inline'` içermeyen CSP** (nonce tabanlı), HSTS, `frame-ancestors 'none'`, `object-src 'none'`, `nosniff`, Referrer-Policy, Permissions-Policy | `test_csp.py` (7 test) — politikada `'unsafe-inline'` bulunmadığı ve sayfada satır içi script/stil kalmadığı sınanır |
 | Bağımlılıklardaki bilinen açıklar | `pip-audit` her push'ta çalışır, bulursa derlemeyi kırar | CI `security` işi |
 | Kendi kodumuzda riskli kalıplar | `bandit` statik analizi (orta ve üzeri) | CI `security` işi |
+| Düzeltmenin doğrulanmadan kapatılması | `awaiting_retest` **açık** bir durum: SLA saati işler, bulgu sayılır; kapanış yalnızca testçinin verdiği sonuçla olur ve denemeler geçmişte durur | `test_pentest.py` (16 test) |
 | **DAST'ın keyfi bir adrese yöneltilmesi (SSRF)** | Arayüzde URL kutusu yok; istek hedef **adı** gönderiyor, URL yapılandırmadan çözülüyor; yalnızca `http(s)`; yönlendirme ve out-of-band kapalı | `test_dast.py` (16 test) |
 | **Taramanın sunucuda keyfi dizin okuması / komut çalıştırması** | İstek proje **adı** gönderiyor, yolu yapılandırmadan geliyor; argümanlar liste, kabuk yok; analiz edilen kod çalıştırılmıyor (AST okunuyor) | `test_scanner.py` (12 test) |
 | **Getirilen kaynağın modele talimat vermesi** | Bilgi bloğu da bulgu bloğu gibi sınırlandırılıyor ve referans ilan ediliyor; kapatıcı etiketler etkisizleştiriliyor | `test_ai.py` · `app/ai.py` |
@@ -404,6 +405,46 @@ Tarama ve izleme de bir ekibe iş açabilir (`?team_id=`): sonuç, tarayıcıyı
 çalıştıran kişinin değil, işi yapacak ekibindir — aynı çıktıyı iki kişi
 yüklediğinde aynı bulgudan iki kopya oluşmaz.
 
+### Pentest: insanın yürüttüğü kısım
+
+Taramalar bir programın söyledikleri. Bir sızma testi bir sürecdir: neyin
+kapsamda olduğu, ne kadarının bakıldığı, birinin ne bulduğu, ve **düzeltmenin
+doğrulanıp doğrulanmadığı**. Bu modül o süreci yönetiyor.
+
+![Pentest](docs/images/pentest.png)
+
+Burada **hiçbir şey çalıştırılmıyor.** Komut alanı, hedef URL'si, yük kitaplığı
+yok — otomatik yarısı Taramalar'da ve orada kalıyor. Bir sızma testi modülünün
+saldırı motoruna dönüşmesi, bu uygulamanın en kolay yapabileceği ve en az
+istemesi gereken şey.
+
+#### Bulgular ayrı bir yerde durmuyor
+
+Testçinin bulduğu şey **sıradan bir bulgu**, `pentest_id` ile çalışmaya bağlı ve
+`source = manual_pentest` ile ayırt ediliyor. SLA, risk matrisi, AI analizi,
+RAG, atama ve denetim günlüğü — hepsi üzerinde çalışıyor, çünkü aynı türden bir
+satır.
+
+İlerleme de yazılmıyor, **sayılıyor**: kapsam maddelerinin kaçı kapandı.
+"Kapsam dışı" bir boşluk değil, test edilmiş bir sonuç — o yüzden kapanmış
+sayılıyor.
+
+#### Yeniden test: "düzelttim" bir iddiadır
+
+```
+Açık → Triyaj → Yeniden test bekliyor ─┬─ geçti  → Düzeltildi
+                                       └─ kaldı  → yeniden Açık, yeni SLA
+```
+
+Yeni bir durum sistemi kurulmadı; mevcut olana **tek bir durum** eklendi:
+`awaiting_retest`. Ve bu **açık** bir durum — SLA saati işlemeye devam ediyor,
+bulgu sayılmaya devam ediyor. Sahibinin sözüyle kapanan bir durum, listeyi
+hiçbir şey değiştirmeden iyi göstermenin yolu olurdu.
+
+Denemeler satır olarak tutuluyor, bayrak olarak değil: iki kez kalıp sonra
+geçen bir bulgu, ilk seferde geçenden başka bir hikâyedir — ve rapor bunun için
+okunur.
+
 ### SLA saati: pencerenin iki ucu
 
 Bir son tarih tek başına yalnızca ne kadar kaldığını söyler. Bulgunun **ne zaman
@@ -744,7 +785,7 @@ bilemez. Doğrulama onları geçerli saymaz, **zincirsiz** olarak raporlar.
 - ⛓️ **Değiştirilemez günlük** — her kayıt bir öncekinin hash'iyle imzalanır; düzenleme, silme veya tarih değiştirme zinciri kırar ve doğrulama nerede kırıldığını söyler
 - 🔎 **Arama ve filtreler** — başlık/varlık/kural içinde arama; kritiklik, kaynak, durum ve SLA aşımına göre süzme
 - 📊 **Pano** — açık bulgu, kapatma oranı, SLA aşımı, kritiklik dağılımı ve kalan süreye göre dağılım; yöneticiye ayrıca reddedilen erişim denemeleri
-- ✅ **Otomatik testler** — pytest ile 246 test, CI üzerinde her değişiklikte çalışır
+- ✅ **Otomatik testler** — pytest ile 262 test, CI üzerinde her değişiklikte çalışır
 - 🔬 **CI'da güvenlik taraması** — `pip-audit` (bağımlılık CVE'leri) + `bandit` (statik analiz), bulursa derlemeyi kırar
 
 ![Pano](docs/images/dashboard.png)
@@ -875,7 +916,7 @@ Sonra:
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                                      # 246 test
+pytest                                      # 262 test
 pip-audit -r requirements.txt --strict      # bağımlılıklarda bilinen CVE var mı
 bandit -r app --severity-level medium       # kendi kodumuzda riskli kalıplar
 ```

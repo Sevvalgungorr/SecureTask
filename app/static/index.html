@@ -76,6 +76,7 @@
       <button class="tab" data-view="risk" type="button">Risk</button>
       <button class="tab tab-ai" data-view="analyst" type="button"><span class="ai-mark" id="tabMark"></span>AI Analyst</button>
       <button class="tab" data-view="scans" type="button">Taramalar</button>
+      <button class="tab" data-view="pentest" type="button">Pentest</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
@@ -350,6 +351,95 @@
       <div class="admin-block">
         <div class="list-head"><h2>Geçmiş</h2><span class="badge">son 10</span></div>
         <ul class="scan-history" id="scanHistory"></ul>
+      </div>
+    </div>
+
+    <!-- Pentest: tarayıcı değil, insan yürüttüğü bir değerlendirme süreci.
+         Burada hiçbir şey çalıştırılmıyor — kapsam, ilerleme, bulgular ve
+         yeniden test takip ediliyor. Otomatik yarısı Taramalar'da. -->
+    <div id="pentestView" class="hidden">
+      <div class="admin-block" id="ptListBlock">
+        <div class="list-head">
+          <h2>Pentest çalışmaları</h2>
+          <button class="btn sm" id="ptNew" type="button">+ Yeni pentest</button>
+        </div>
+        <div class="pt-list" id="ptList"></div>
+        <div class="empty hidden" id="ptEmpty">
+          Henüz bir pentest çalışması yok.<br>
+          <span class="empty-sub">Yeni bir çalışma açtığında kapsam, bulgular ve
+          yeniden test buradan yönetilir.</span>
+        </div>
+      </div>
+
+      <form class="admin-block hidden" id="ptForm">
+        <div class="list-head"><h2>Yeni pentest</h2></div>
+        <div class="add">
+          <div class="add-fields">
+            <input id="ptName" placeholder="Çalışma adı — ör. OpenIDX Web Pentest" required>
+            <input id="ptAsset" placeholder="Hedef / varlık — ör. staging.example.test">
+            <input id="ptDesc" placeholder="Kısa açıklama (isteğe bağlı)">
+            <div class="add-row">
+              <select id="ptKind" class="mini-select" title="Tür">
+                <option value="web">Web uygulaması</option>
+                <option value="api">API</option>
+                <option value="internal">İç uygulama</option>
+              </select>
+              <select id="ptEnv" class="mini-select" title="Ortam">
+                <option value="test">Test</option>
+                <option value="staging">Staging</option>
+              </select>
+              <input id="ptStart" type="date" class="mini-date" title="Başlangıç">
+              <input id="ptDue" type="date" class="mini-date" title="Hedef bitiş">
+              <select id="ptTeam" class="mini-select" title="Ekip"></select>
+            </div>
+          </div>
+          <button class="btn" type="submit">Aç</button>
+        </div>
+        <p class="chart-note">Burada çalıştırılan bir şey yok: bu bir süreç kaydı.</p>
+      </form>
+
+      <div class="hidden" id="ptDetail">
+        <div class="admin-block pt-head">
+          <button class="btn ghost sm" id="ptBack" type="button">← Çalışmalar</button>
+          <h1 id="ptTitle"></h1>
+          <p class="pt-sub" id="ptSub"></p>
+          <div class="pt-progress">
+            <div class="pt-bar"><i id="ptBarFill"></i></div>
+            <span id="ptPct"></span>
+          </div>
+        </div>
+        <div class="kpis" id="ptKpis"></div>
+        <div class="dash-grid">
+          <div class="admin-block">
+            <div class="list-head"><h2>Kapsam</h2><span class="badge" id="ptScopeBadge"></span></div>
+            <div class="pt-scope" id="ptScope"></div>
+          </div>
+          <div class="dash-col">
+            <div class="admin-block">
+              <div class="list-head">
+                <h2>Bulgular</h2>
+                <button class="btn sm" id="ptAddFinding" type="button">+ Bulgu ekle</button>
+              </div>
+              <form class="add hidden" id="ptFindingForm">
+                <div class="add-fields">
+                  <input id="pfTitle" placeholder="Bulgu başlığı" required>
+                  <input id="pfDesc" placeholder="Kanıt / açıklama">
+                  <input id="pfAsset" placeholder="Uç nokta (boşsa çalışmanın hedefi)">
+                  <div class="add-row">
+                    <select id="pfSev" class="mini-select">
+                      <option value="low">Düşük</option>
+                      <option value="medium" selected>Orta</option>
+                      <option value="high">Yüksek</option>
+                      <option value="critical">Kritik</option>
+                    </select>
+                    <button class="btn sm" type="submit">Ekle</button>
+                  </div>
+                </div>
+              </form>
+              <ul class="findings" id="ptFindings"></ul>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
 

@@ -33,8 +33,15 @@ from app.models import (
     SEVERITY_ORDER,
     SLA_DAYS,
     TEAM_RISK_OWNER,
+    AWAITING_RETEST,
+    CLOSED_STATUSES,
+    DEFAULT_SCOPE,
+    SCOPE_DONE,
     AIAnalysis,
     Asset,
+    Pentest,
+    PentestScope,
+    Retest,
     ScanRun,
     AuditLog,
     Finding,
@@ -53,6 +60,10 @@ from app.schemas import (
     FindingCreate,
     FindingResponse,
     FindingUpdate,
+    PentestCreate,
+    PentestUpdate,
+    RetestCreate,
+    ScopeUpdate,
     TeamCreate,
     TeamMemberAdd,
     TeamResponse,
@@ -1532,6 +1543,352 @@ def analyze_finding(
     )
 
     return _analysis_response(row)
+
+
+# --- Pentest engagements ------------------------------------------------------
+#
+# A process, not a scanner. Nothing here runs anything against a target: the
+# module tracks what is in scope, how far it has got, what a person found, and
+# whether the fix was verified. The automated half lives in `scan_runs`, and
+# the two stay apart because they answer to different things — one to a
+# schedule, one to a tester.
+
+
+def _visible_pentest(pentest_id: int, user: User, db: Session) -> Pentest:
+    """The engagement, if this caller may see it.
+
+    Same rule findings follow: your own, or your teams'. 404 rather than 403
+    for anything else — the existence of someone else's engagement is not
+    confirmed.
+    """
+    teams = [row.team_id for row in
+             db.query(TeamMember).filter(TeamMember.user_id == user.id).all()]
+    row = (
+        db.query(Pentest)
+        .filter(
+            Pentest.id == pentest_id,
+            or_(Pentest.owner_id == user.id,
+                Pentest.team_id.in_(teams) if teams else False),
+        )
+        .one_or_none()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Pentest bulunamadı.")
+
+    return row
+
+
+def _pentest_view(row: Pentest, db: Session) -> dict:
+    scopes = db.query(PentestScope).filter(PentestScope.pentest_id == row.id).all()
+    findings = db.query(Finding).filter(Finding.pentest_id == row.id).all()
+    done = [s for s in scopes if s.status in SCOPE_DONE]
+
+    return {
+        "id": row.id,
+        "name": row.name,
+        "asset": row.asset,
+        "kind": row.kind,
+        "environment": row.environment,
+        "status": row.status,
+        "started_on": row.started_on,
+        "due_on": row.due_on,
+        "description": row.description or "",
+        "team_id": row.team_id,
+        "tester_id": row.tester_id,
+        "owner_id": row.owner_id,
+        # Computed from the scope rows, never typed in. A percentage somebody
+        # entered by hand is a number about how they feel.
+        "scope_total": len(scopes),
+        "scope_done": len(done),
+        "progress": round(len(done) / len(scopes) * 100) if scopes else 0,
+        "findings": len(findings),
+        "high": sum(1 for f in findings if f.severity in ("high", "critical")),
+        "awaiting_retest": sum(1 for f in findings if f.status == AWAITING_RETEST),
+        "open": sum(1 for f in findings if f.status not in CLOSED_STATUSES),
+    }
+
+
+@app.post("/pentests")
+def create_pentest(
+    body: PentestCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Open an engagement.
+
+    The scope arrives pre-filled with the usual areas so that progress means
+    something from the first day: an engagement with no scope rows would show
+    0% forever and tell nobody anything.
+    """
+    if body.team_id is not None:
+        _require_membership(db, user, body.team_id)
+
+    row = Pentest(
+        name=body.name, asset=body.asset, kind=body.kind,
+        environment=body.environment, started_on=body.started_on,
+        due_on=body.due_on, description=body.description,
+        team_id=body.team_id, tester_id=body.tester_id or user.id,
+        owner_id=user.id, status="planned",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    db.add_all([
+        PentestScope(pentest_id=row.id, name=name) for name in DEFAULT_SCOPE
+    ])
+    db.commit()
+
+    _record_audit(db, user, "pentest", None, f"pentest açıldı · {row.name}")
+    return _pentest_view(row, db)
+
+
+@app.get("/pentests")
+def list_pentests(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    teams = [r.team_id for r in
+             db.query(TeamMember).filter(TeamMember.user_id == user.id).all()]
+    rows = (
+        db.query(Pentest)
+        .filter(or_(Pentest.owner_id == user.id,
+                    Pentest.team_id.in_(teams) if teams else False))
+        .order_by(Pentest.id.desc())
+        .all()
+    )
+    return [_pentest_view(row, db) for row in rows]
+
+
+@app.get("/pentests/{pentest_id}")
+def get_pentest(
+    pentest_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = _visible_pentest(pentest_id, user, db)
+    scopes = (
+        db.query(PentestScope)
+        .filter(PentestScope.pentest_id == row.id)
+        .order_by(PentestScope.id)
+        .all()
+    )
+    return {
+        **_pentest_view(row, db),
+        "scope": [
+            {"id": s.id, "name": s.name, "status": s.status, "note": s.note or ""}
+            for s in scopes
+        ],
+    }
+
+
+@app.put("/pentests/{pentest_id}")
+def update_pentest(
+    pentest_id: int,
+    body: PentestUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = _visible_pentest(pentest_id, user, db)
+    before = row.status
+
+    if body.status is not None:
+        row.status = body.status
+    if body.tester_id is not None:
+        row.tester_id = body.tester_id
+    if body.due_on is not None:
+        row.due_on = body.due_on
+
+    db.commit()
+
+    if body.status and body.status != before:
+        _record_audit(
+            db, user, "pentest", None,
+            f"{row.name} · durum {before}→{row.status}",
+        )
+
+    return _pentest_view(row, db)
+
+
+@app.put("/pentests/{pentest_id}/scope/{scope_id}")
+def update_scope(
+    pentest_id: int,
+    scope_id: int,
+    body: ScopeUpdate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    pentest = _visible_pentest(pentest_id, user, db)
+    row = (
+        db.query(PentestScope)
+        .filter(PentestScope.id == scope_id, PentestScope.pentest_id == pentest.id)
+        .one_or_none()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Kapsam maddesi bulunamadı.")
+
+    before = row.status
+    row.status = body.status
+
+    if body.note is not None:
+        row.note = body.note[:500]
+
+    db.commit()
+
+    if before != row.status:
+        _record_audit(
+            db, user, "pentest", None,
+            f"{pentest.name} · kapsam {row.name}: {before}→{row.status}",
+        )
+
+    return _pentest_view(pentest, db)
+
+
+@app.post("/pentests/{pentest_id}/findings", response_model=FindingResponse)
+def add_pentest_finding(
+    pentest_id: int,
+    body: FindingCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """File a finding a person found.
+
+    An ordinary finding, tagged with the engagement. There is no separate store
+    for what a tester found, because the SLA, the risk view, the AI analysis and
+    the audit trail are all things it should get — and it gets them by being the
+    same kind of row as everything else.
+    """
+    pentest = _visible_pentest(pentest_id, user, db)
+
+    row = Finding(
+        title=body.title,
+        description=body.description,
+        asset=body.asset or pentest.asset,
+        severity=body.severity,
+        status="open",
+        due_date=body.due_date or _sla_due_date(body.severity),
+        owner_id=user.id,
+        team_id=pentest.team_id,
+        pentest_id=pentest.id,
+        # Distinguishable from a scanner's output at a glance, and in the
+        # source filter, without a second table to look in.
+        source="manual_pentest",
+        source_ref=f"pentest-{pentest.id}",
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    _record_audit(
+        db, user, "created", row.id,
+        f"{row.title} · severity {row.severity} · pentest {pentest.name}",
+    )
+    return row
+
+
+@app.post("/findings/{finding_id}/retest")
+def request_retest(
+    finding_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """"I think this is fixed" — which is a claim, not a closure.
+
+    The status moves to awaiting_retest, which is deliberately still open: the
+    SLA clock keeps running and the finding keeps counting. A state that closed
+    a finding on its author's word would be a way to make the list look better
+    without changing anything.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+
+    if finding.status in CLOSED_STATUSES:
+        raise HTTPException(
+            status_code=422,
+            detail="Kapanmış bir bulgu için yeniden test istenemez.",
+        )
+
+    before = finding.status
+    finding.status = AWAITING_RETEST
+    db.commit()
+
+    _record_audit(
+        db, user, "updated", finding.id,
+        f"{finding.title} · status {before}→{AWAITING_RETEST} · yeniden test istendi",
+    )
+    return {"status": finding.status}
+
+
+@app.post("/findings/{finding_id}/retest/result")
+def record_retest(
+    finding_id: int,
+    body: RetestCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The tester's verdict, and the row that keeps it.
+
+    Passed closes the finding; failed reopens it. Kept as history rather than a
+    flag because a finding that failed retest twice before passing is a
+    different story from one that passed first time, and that difference is
+    what a report is read for.
+    """
+    finding = _get_visible_finding(finding_id, user, db)
+
+    if finding.status != AWAITING_RETEST:
+        raise HTTPException(
+            status_code=422,
+            detail="Bu bulgu yeniden test bekliyor durumunda değil.",
+        )
+
+    attempt = Retest(
+        finding_id=finding.id, result=body.result,
+        note=(body.note or "")[:1000] or None, tester_id=user.id,
+    )
+    db.add(attempt)
+
+    before = finding.status
+    finding.status = "fixed" if body.result == "passed" else "open"
+
+    if body.result == "failed":
+        # Back on the list with a fresh window: the fix did not hold, so the
+        # remaining time should reflect that it starts again.
+        finding.due_date = _sla_due_date(finding.severity)
+
+    db.commit()
+
+    _record_audit(
+        db, user, "updated", finding.id,
+        f"{finding.title} · status {before}→{finding.status} · yeniden test "
+        f"{'geçti' if body.result == 'passed' else 'başarısız'}",
+    )
+    return {"status": finding.status, "result": body.result}
+
+
+@app.get("/findings/{finding_id}/retest")
+def retest_history(
+    finding_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    finding = _get_visible_finding(finding_id, user, db)
+    rows = (
+        db.query(Retest)
+        .filter(Retest.finding_id == finding.id)
+        .order_by(Retest.id)
+        .all()
+    )
+    names = {u.id: u.username for u in db.query(User).all()}
+
+    return [
+        {
+            "id": r.id, "result": r.result, "note": r.note or "",
+            "created_at": r.created_at,
+            "tester": names.get(r.tester_id, "—"),
+        }
+        for r in rows
+    ]
 
 
 # --- Local SAST scans ---------------------------------------------------------

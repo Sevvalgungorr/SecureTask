@@ -785,6 +785,73 @@
   .b-running, .b-queued { color: var(--accent); background: var(--accent-soft); }
   .scan-item.s-failed { border-left: 3px solid var(--danger); }
 
+  /* --- Pentest --------------------------------------------------------------
+     Bir süreç ekranı: kapsam, ilerleme, bulgular. Tarayıcı sayfalarından
+     görsel olarak ayrı ama aynı dili konuşuyor. */
+  .pt-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(19rem, 1fr)); gap: .7rem; }
+  .pt-card {
+    display: flex; flex-direction: column; gap: .5rem; text-align: left;
+    font: inherit; color: var(--ink); cursor: pointer;
+    padding: .9rem 1rem; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .pt-card:hover {
+    border-color: color-mix(in srgb, var(--accent) 38%, var(--line));
+    box-shadow: var(--sh); transform: translateY(-1px);
+  }
+  .pt-card-head { display: flex; align-items: center; justify-content: space-between; gap: .6rem; }
+  .pt-card-head b { font-size: .95rem; }
+  .pt-meta { font-size: .76rem; color: var(--muted); }
+  .pt-state {
+    font-size: .66rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .14rem .5rem; border-radius: 999px; flex-shrink: 0;
+    color: var(--accent); background: var(--accent-soft);
+  }
+  .pt-state.s-completed { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  .pt-state.s-cancelled { color: var(--faint); background: var(--line-2); }
+  .pt-state.s-awaiting_retest { color: var(--sla-hot); background: color-mix(in srgb, var(--sla-hot) 16%, transparent); }
+
+  .pt-bar {
+    height: 7px; border-radius: 999px; overflow: hidden; flex: 1;
+    background: color-mix(in srgb, var(--ink) 8%, transparent);
+  }
+  .pt-bar.sm { height: 5px; }
+  .pt-bar > i { display: block; height: 100%; border-radius: 999px; background: var(--accent); transition: width .45s ease; }
+  .pt-nums { display: flex; flex-wrap: wrap; gap: .35rem; }
+  .pt-chip {
+    font-size: .72rem; font-weight: 700; color: var(--muted);
+    padding: .1rem .45rem; border-radius: 999px; background: var(--line-2);
+  }
+  .pt-chip.hot { color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent); }
+  .pt-chip.warn { color: var(--sla-hot); background: color-mix(in srgb, var(--sla-hot) 14%, transparent); }
+
+  .pt-head h1 { margin: .5rem 0 .2rem; font-size: 1.25rem; letter-spacing: -.02em; }
+  .pt-sub { margin: 0 0 .9rem; font-size: .82rem; color: var(--muted); }
+  .pt-progress { display: flex; align-items: center; gap: .8rem; }
+  .pt-progress > span { font-size: .84rem; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  .pt-scope { display: grid; gap: .4rem; }
+  .scope-row {
+    display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+    padding: .5rem .7rem; border-radius: 10px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .scope-name { font-size: .85rem; font-weight: 600; }
+
+  /* Bulgu satırı geniş ekran düzenini medya sorgusundan alıyor, ve o sorgu
+     görünüm penceresine bakıyor — kapsayıcıya değil. Pentest sayfasının dar
+     sütununda bu, açıklamayla düğmelerin üst üste binmesi demek. Burada
+     yığılmış hâline dönüyor. */
+  #ptFindings li.finding > .body { display: block; }
+  #ptFindings li.finding .body > .title-wrap { min-width: 0; }
+  #ptFindings li.finding .meta { margin-top: .4rem; justify-content: flex-start; }
+  #ptFindings li.finding { flex-wrap: wrap; }
+  #ptFindings .actions { width: 100%; justify-content: flex-end; margin-top: .5rem; }
+
+  .retest-wrap { display: inline-flex; gap: .35rem; }
+  .btn.sm.retest.ok { background: var(--ok); box-shadow: none; }
+  .btn.sm.retest.bad { background: var(--danger); box-shadow: none; }
+
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
   .filters { display: inline-flex; gap: .25rem; }

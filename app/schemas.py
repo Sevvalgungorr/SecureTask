@@ -4,7 +4,14 @@ from typing import Literal
 from pydantic import BaseModel
 
 Severity = Literal["low", "medium", "high", "critical"]
-Status = Literal["open", "triaged", "fixed", "accepted_risk"]
+# "awaiting_retest" sits between triaged and fixed: the developer says it is
+# done, the tester has not agreed. It is an OPEN state — the SLA clock keeps
+# running — because a finding that stops counting when its author says so is a
+# finding nobody verifies.
+Status = Literal["open", "triaged", "awaiting_retest", "fixed", "accepted_risk"]
+PentestStatus = Literal["planned", "in_progress", "awaiting_retest", "completed", "cancelled"]
+ScopeStatus = Literal["not_started", "in_progress", "completed", "not_applicable"]
+RetestResult = Literal["passed", "failed"]
 
 
 TeamRole = Literal["member", "risk_owner"]
@@ -89,6 +96,9 @@ class FindingResponse(FindingCreate):
     # already late, or one that never ages.
     created_at: datetime
     closed_at: datetime | None = None
+    # The engagement this came out of, when it came out of one. Read-only here:
+    # a finding is attached to a pentest by being filed through it.
+    pentest_id: int | None = None
     # Read-only, and only ever set by an importer: the lines the report carried.
     evidence: str | None = None
     evidence_start: int | None = None
@@ -101,6 +111,36 @@ class FindingResponse(FindingCreate):
     model_config = {
         "from_attributes": True
     }
+
+
+class PentestCreate(BaseModel):
+    name: str
+    asset: str = ""
+    kind: Literal["web", "api", "internal"] = "web"
+    # No production value. An engagement against production is a decision
+    # someone writes deliberately rather than picks from a menu.
+    environment: Literal["test", "staging"] = "test"
+    started_on: date | None = None
+    due_on: date | None = None
+    description: str | None = None
+    team_id: int | None = None
+    tester_id: int | None = None
+
+
+class PentestUpdate(BaseModel):
+    status: PentestStatus | None = None
+    tester_id: int | None = None
+    due_on: date | None = None
+
+
+class ScopeUpdate(BaseModel):
+    status: ScopeStatus
+    note: str | None = None
+
+
+class RetestCreate(BaseModel):
+    result: RetestResult
+    note: str | None = None
 
 
 class AssetCreate(BaseModel):
