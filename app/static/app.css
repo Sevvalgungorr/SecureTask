@@ -737,6 +737,47 @@
     .prio-score { flex-basis: 100%; text-align: left; }
   }
 
+  /* --- SAST taramaları ------------------------------------------------------
+     Bulgular için ayrı bir görünüm yok: tarayıcının bulduğu her şey mevcut
+     bulgu listesine düşüyor. Buradaki tek iş taramayı başlatmak ve nasıl
+     gittiğini göstermek. */
+  .scan-lead { margin: 0 .25rem 1rem; }
+  .scan-form { display: flex; gap: .75rem; align-items: flex-end; flex-wrap: wrap; }
+  .scan-field { display: flex; flex-direction: column; gap: .3rem; }
+  .scan-field > span { font-size: .74rem; color: var(--faint); font-weight: 700; }
+  .scan-field .mini-select { min-width: 11rem; }
+  /* Çalışmayacak bir şeyi çalışır gibi göstermek yerine sebebini yazıyoruz. */
+  .scan-warn { margin: .8rem .25rem 0; color: var(--sla-hot); }
+
+  .scan-latest { display: flex; gap: .8rem; flex-wrap: wrap; align-items: stretch; }
+  .scan-stat {
+    flex: 1 1 8rem; padding: .7rem .85rem; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: .2rem;
+  }
+  .scan-stat .s-lbl { font-size: .72rem; color: var(--faint); font-weight: 700; }
+  .scan-stat b { font-size: 1.3rem; font-variant-numeric: tabular-nums; }
+  .scan-stat.hot b { color: var(--accent); }
+  .scan-go { flex: 0 0 auto; align-self: center; }
+  .scan-error { margin: 0; font-size: .84rem; color: var(--danger); }
+
+  .scan-history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+  .scan-item {
+    display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+    padding: .6rem .8rem; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .scan-item b { font-size: .86rem; }
+  .scan-sub { font-size: .76rem; color: var(--muted); margin-top: .1rem; }
+  .scan-badge {
+    font-size: .68rem; font-weight: 800; text-transform: uppercase; letter-spacing: .05em;
+    padding: .14rem .5rem; border-radius: 999px; flex-shrink: 0;
+  }
+  .b-completed { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
+  .b-failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
+  .b-running, .b-queued { color: var(--accent); background: var(--accent-soft); }
+  .scan-item.s-failed { border-left: 3px solid var(--danger); }
+
   .list-head { display: flex; align-items: center; justify-content: space-between; margin: 0 .25rem .7rem; gap: .5rem; flex-wrap: wrap; }
   .list-head h2 { font-size: .74rem; text-transform: uppercase; letter-spacing: .12em; color: var(--faint); margin: 0; font-weight: 800; }
   .filters { display: inline-flex; gap: .25rem; }

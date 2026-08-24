@@ -120,6 +120,42 @@ SOURCE_ROOT = os.getenv("SOURCE_ROOT", "")
 # time.
 SOURCE_CONTEXT_LINES = int(os.getenv("SOURCE_CONTEXT_LINES", "5"))
 
+# --- Local SAST scans ---------------------------------------------------------
+#
+# Projects this installation may run a static analyser over, as
+# "name=/path,name=/path". Empty by default: unset means no scanning, which is
+# the right default for anything that reads a directory and starts a process.
+#
+# The request names a *project*, never a path. That is the whole defence: a
+# caller cannot ask for a directory that is not in this list, so there is no
+# traversal to attempt and nothing to sanitise. Same shape as the AI endpoint,
+# and for the same reason.
+#
+# What runs is a parser, not the code: bandit reads Python into an AST and
+# inspects it. Nothing under the project directory is executed, which is what
+# separates this from cloning a repository and running its build.
+def _projects(raw: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+
+    for part in raw.split(","):
+        name, _, path = part.partition("=")
+
+        if name.strip() and path.strip():
+            out[name.strip()] = path.strip()
+
+    return out
+
+
+SCAN_PROJECTS = _projects(os.getenv("SCAN_PROJECTS", ""))
+
+# A scan that has not finished by now is not going to. Bandit over a normal
+# repository takes seconds; a runaway is a hung worker, not a slow answer.
+SCAN_TIMEOUT_SECONDS = float(os.getenv("SCAN_TIMEOUT_SECONDS", "180"))
+
+# Refuse a report larger than this rather than parsing it. A scanner pointed at
+# something enormous should fail loudly, not fill the database.
+SCAN_MAX_OUTPUT = int(os.getenv("SCAN_MAX_OUTPUT", str(8 * 1024 * 1024)))
+
 # --- AI analysis -------------------------------------------------------------
 #
 # A model reads a finding and says how exploitable it looks, what it would cost,

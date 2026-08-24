@@ -1,4 +1,5 @@
 import secrets
+import threading
 import time
 from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
@@ -11,7 +12,7 @@ from sqlalchemy import or_, text
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import ai, audit, knowledge
+from app import ai, audit, knowledge, scanner
 from app.auth import (
     callback_router,
     get_current_user,
@@ -34,6 +35,7 @@ from app.models import (
     TEAM_RISK_OWNER,
     AIAnalysis,
     Asset,
+    ScanRun,
     AuditLog,
     Finding,
     Team,
@@ -1530,6 +1532,196 @@ def analyze_finding(
     )
 
     return _analysis_response(row)
+
+
+# --- Local SAST scans ---------------------------------------------------------
+
+
+def _scan_view(row: ScanRun) -> dict:
+    return {
+        "id": row.id,
+        "project": row.project,
+        "scanner": row.scanner,
+        "status": row.status,
+        "started_at": row.started_at,
+        "finished_at": row.finished_at,
+        "created": row.created,
+        "reopened": row.reopened,
+        "unchanged": row.unchanged,
+        "total": row.total,
+        "error": row.error or "",
+    }
+
+
+def _run_scan(scan_id: int, user_id: int, team_id: int | None,
+              project: str, scanner_key: str) -> None:
+    """Run the analyser and import what it found. Off the request thread.
+
+    Its own session: the request that started this has already returned, and
+    its session is gone. Everything is written through this one so a failure
+    still lands as a row saying what went wrong — a scan that leaves no trace
+    is indistinguishable from one that was never started.
+    """
+    db = SessionLocal()
+
+    try:
+        row = db.query(ScanRun).filter(ScanRun.id == scan_id).one_or_none()
+
+        if row is None:
+            return
+
+        row.status = "running"
+        db.commit()
+
+        try:
+            result = scanner.run(project, scanner_key)
+        except (scanner.ScanRefused, scanner.ScanFailed) as exc:
+            row.status = "failed"
+            row.error = str(exc)[:400]
+            row.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
+
+        # Straight into the reader an uploaded report goes through. Bandit
+        # emits SARIF, so there is nothing new to parse and nothing new to
+        # decide: same deduplication, same "a scan may not overwrite a
+        # judgement" rule, same audit line.
+        results, skipped, tool = parse_sarif(result.sarif)
+        user = db.query(User).filter(User.id == user_id).one_or_none()
+
+        if user is None:
+            row.status = "failed"
+            row.error = "Taramayı başlatan hesap bulunamadı."
+            row.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
+
+        counts = _ingest(db, user, team_id, results, tool or scanner_key, skipped)
+
+        row.status = "completed"
+        row.created = counts.get("created", 0)
+        row.reopened = counts.get("reopened", 0)
+        row.unchanged = counts.get("unchanged", 0)
+        row.total = len(results)
+        row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+    except Exception as exc:  # noqa: BLE001 - a thread that dies silently is worse
+        db.rollback()
+        row = db.query(ScanRun).filter(ScanRun.id == scan_id).one_or_none()
+
+        if row is not None:
+            row.status = "failed"
+            row.error = f"Beklenmeyen hata: {type(exc).__name__}"
+            row.finished_at = datetime.now(timezone.utc)
+            db.commit()
+    finally:
+        db.close()
+
+
+@app.get("/scan/options")
+def scan_options(user: User = Depends(get_current_user)):
+    """What may be scanned and with what.
+
+    Behind authentication: which projects an installation has registered is
+    not something to tell an anonymous caller.
+    """
+    return {"projects": scanner.projects(), "scanners": scanner.scanners()}
+
+
+@app.post("/scan")
+def start_scan(
+    project: str,
+    scanner_key: str = "bandit",
+    team_id: int | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Start a static analysis of a registered project.
+
+    `project` is a **name**, not a path. The directory comes from configuration,
+    so there is no traversal to attempt and nothing to sanitise — the same
+    shape as the AI provider endpoint, for the same reason.
+
+    Static analysis only. The analyser parses the code into a syntax tree and
+    reads it; nothing under the project directory is executed. Scanning a
+    network target is a different thing with different consequences and stays
+    out of this application.
+    """
+    if team_id is not None:
+        _require_membership(db, user, team_id)
+
+    if project not in scanner.SCAN_PROJECTS:
+        raise HTTPException(status_code=404, detail="Böyle bir proje tanımlı değil.")
+
+    # One at a time per project. Two analysers writing findings for the same
+    # tree at once produce a race over the deduplication, and the second run
+    # tells nobody anything the first will not.
+    busy = (
+        db.query(ScanRun)
+        .filter(ScanRun.project == project, ScanRun.status.in_(("queued", "running")))
+        .first()
+    )
+
+    if busy is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="Bu proje için zaten süren bir tarama var.",
+        )
+
+    row = ScanRun(
+        project=project, scanner=scanner_key, status="queued",
+        owner_id=user.id, team_id=team_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    _record_audit(
+        db, user, "scanned", None,
+        f"SAST başlatıldı · {project} · {scanner_key}",
+    )
+
+    threading.Thread(
+        target=_run_scan,
+        args=(row.id, user.id, team_id, project, scanner_key),
+        daemon=True,
+    ).start()
+
+    return _scan_view(row)
+
+
+@app.get("/scan")
+def list_scans(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """This caller's recent runs, newest first."""
+    rows = (
+        db.query(ScanRun)
+        .filter(ScanRun.owner_id == user.id)
+        .order_by(ScanRun.id.desc())
+        .limit(10)
+        .all()
+    )
+    return [_scan_view(row) for row in rows]
+
+
+@app.get("/scan/{scan_id}")
+def get_scan(
+    scan_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    row = (
+        db.query(ScanRun)
+        .filter(ScanRun.id == scan_id, ScanRun.owner_id == user.id)
+        .one_or_none()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Tarama bulunamadı.")
+
+    return _scan_view(row)
 
 
 @app.post("/risk/expire")

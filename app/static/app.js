@@ -2393,7 +2393,155 @@ function renderAnalyst() {
   renderInsights(rows);
 }
 
-const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- SAST taramaları ---------------------------------------------------------
+//
+// Bulgular için ayrı bir sistem yok: tarayıcı ne bulursa mevcut içe aktarma
+// yolundan geçiyor, mevcut tekilleştirmeyle. Bu sayfa yalnızca taramayı
+// başlatıyor ve nasıl gittiğini gösteriyor.
+
+const SCAN_LABEL = {
+  queued: "sırada", running: "çalışıyor", completed: "tamamlandı", failed: "başarısız",
+};
+
+let scanPoll = null;
+
+function scanRow(run) {
+  const li = document.createElement("li");
+  li.className = "scan-item s-" + run.status;
+  const left = document.createElement("div");
+  const when = document.createElement("b");
+  when.textContent = `${run.project} · ${run.scanner}`;
+  const sub = document.createElement("div");
+  sub.className = "scan-sub";
+  sub.textContent = run.error
+    ? run.error
+    : run.status === "completed"
+      ? `${run.total} sonuç · ${run.created} yeni · ${run.reopened} yeniden açıldı · ${run.unchanged} değişmedi`
+      : SCAN_LABEL[run.status] || run.status;
+  left.append(when, sub);
+
+  const state = document.createElement("span");
+  state.className = "scan-badge b-" + run.status;
+  state.textContent = SCAN_LABEL[run.status] || run.status;
+  li.append(left, state);
+  return li;
+}
+
+function renderLatest(run) {
+  const block = document.getElementById("scanLatestBlock");
+  block.classList.toggle("hidden", !run);
+  if (!run) return;
+
+  document.getElementById("scanStatus").textContent = SCAN_LABEL[run.status] || run.status;
+  const host = document.getElementById("scanLatest");
+  host.innerHTML = "";
+
+  const stat = (label, value, cls) => {
+    const box = document.createElement("div");
+    box.className = "scan-stat" + (cls ? " " + cls : "");
+    const l = document.createElement("span"); l.className = "s-lbl"; l.textContent = label;
+    const v = document.createElement("b"); v.textContent = value;
+    box.append(l, v);
+    host.appendChild(box);
+  };
+
+  if (run.status === "failed") {
+    const err = document.createElement("p");
+    err.className = "scan-error";
+    err.textContent = run.error || "Tarama başarısız oldu.";
+    host.appendChild(err);
+    return;
+  }
+
+  if (run.status !== "completed") {
+    const p = document.createElement("p");
+    p.className = "chart-note";
+    p.textContent = run.status === "queued"
+      ? "Tarama sıraya alındı…"
+      : "Kaynak kod taranıyor…";
+    host.appendChild(p);
+    return;
+  }
+
+  stat("Toplam sonuç", String(run.total));
+  stat("Yeni bulgu", String(run.created), run.created ? "hot" : "");
+  stat("Yeniden açılan", String(run.reopened));
+  stat("Değişmeyen", String(run.unchanged));
+
+  const go = document.createElement("button");
+  go.className = "btn sm scan-go";
+  go.type = "button";
+  go.textContent = "Bulguları gör";
+  go.onclick = () => document.querySelector('.tab[data-view="my"]').click();
+  host.appendChild(go);
+}
+
+async function loadScans() {
+  const opts = await api("/scan/options");
+  const projectSel = document.getElementById("scanProject");
+  const scannerSel = document.getElementById("scanScanner");
+  const warn = document.getElementById("scanWarn");
+  const start = document.getElementById("scanStart");
+
+  projectSel.innerHTML = "";
+  opts.projects.forEach(p => {
+    const o = document.createElement("option");
+    o.value = p.name;
+    o.textContent = p.available ? p.name : `${p.name} (dizin yok)`;
+    o.disabled = !p.available;
+    projectSel.appendChild(o);
+  });
+
+  scannerSel.innerHTML = "";
+  opts.scanners.forEach(sc => {
+    const o = document.createElement("option");
+    o.value = sc.key;
+    o.textContent = sc.installed ? sc.label : `${sc.label} (kurulu değil)`;
+    o.disabled = !sc.installed;
+    scannerSel.appendChild(o);
+  });
+
+  // Yapılandırılmamış ya da kurulu olmayan bir şeyi çalışır gibi göstermek
+  // yerine neden çalışmadığını söylüyoruz.
+  const usable = opts.projects.some(p => p.available)
+    && opts.scanners.some(sc => sc.installed);
+  warn.classList.toggle("hidden", usable);
+  start.disabled = !usable;
+
+  if (!usable) {
+    warn.textContent = !opts.projects.length
+      ? "Taranabilir proje tanımlı değil. Kurulum: .env içinde SCAN_PROJECTS."
+      : "Seçilebilir bir tarayıcı yok — bu makinede kurulu değil.";
+  }
+
+  const runs = await api("/scan");
+  const list = document.getElementById("scanHistory");
+  list.innerHTML = "";
+  runs.forEach(r => list.appendChild(scanRow(r)));
+  renderLatest(runs[0] || null);
+
+  // Süren bir tarama varsa bitene kadar izle. Bittiğinde bulgular da
+  // tazeleniyor, çünkü listeye yeni satırlar düşmüş olabilir.
+  const live = runs.find(r => r.status === "queued" || r.status === "running");
+  clearTimeout(scanPoll);
+  if (live) scanPoll = setTimeout(() => loadScans().catch(() => {}), 1500);
+  else if (runs[0] && runs[0].status === "completed") loadFindings().catch(() => {});
+}
+
+document.getElementById("scanStart").onclick = async (e) => {
+  const project = document.getElementById("scanProject").value;
+  const scannerKey = document.getElementById("scanScanner").value;
+  e.target.disabled = true;
+  try {
+    await api(`/scan?project=${encodeURIComponent(project)}`
+      + `&scanner_key=${encodeURIComponent(scannerKey)}`, { method: "POST" });
+    toast("Tarama başlatıldı");
+    await loadScans();
+  } catch (err) { toast(err.message); }
+  e.target.disabled = false;
+};
+
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -2415,6 +2563,7 @@ function setupTabs() {
       // bulgularla birlikte geliyor.
       if (v === "analyst") loadFindings().catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
+      if (v === "scans") loadScans().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
