@@ -31,7 +31,21 @@ import sys
 from dataclasses import dataclass
 from pathlib import Path
 
-from app.config import SCAN_MAX_OUTPUT, SCAN_PROJECTS, SCAN_TIMEOUT_SECONDS  # noqa: F401
+from app.config import (  # noqa: F401
+    DAST_CONCURRENCY,
+    DAST_RATE_LIMIT,
+    DAST_TARGETS,
+    DAST_TIMEOUT_SECONDS,
+    SCAN_MAX_OUTPUT,
+    SCAN_PROJECTS,
+    SCAN_TIMEOUT_SECONDS,
+)
+
+# Static analysis reads files; dynamic analysis sends live traffic at something
+# that is running. They are different enough in consequence that the code keeps
+# them apart by name rather than by a boolean.
+SAST = "sast"
+DAST = "dast"
 
 # Which analysers this installation knows how to run. One for now; the shape is
 # here so a second is a table entry rather than a rewrite, and no further
@@ -76,8 +90,56 @@ SCANNERS: dict[str, dict] = {
         # with results, not a failure — treating it as one would mean the
         # scanner only "worked" when the code was clean.
         "ok_returncodes": (0, 1),
+        "kind": SAST,
+    },
+    "nuclei": {
+        "label": "Nuclei",
+        "binary": "nuclei",
+        "kind": DAST,
+        # Every flag here is a restriction, and each one is load-bearing.
+        #
+        # `-no-interactsh` is the one people miss: by default nuclei uses a
+        # **public** out-of-band server to detect blind vulnerabilities, which
+        # means it tells a third party what it is scanning. On an internal
+        # staging system that is a disclosure nobody asked for.
+        #
+        # `-duc` stops it phoning home for template updates mid-scan, so a run
+        # is reproducible and makes no connection the operator did not expect.
+        "args": lambda target: [
+            "-target", str(target),
+            "-jsonl",
+            "-silent",
+            "-disable-update-check",
+            "-no-interactsh",
+            "-disable-redirects",
+            # Templates that change state or hammer the target. This is a
+            # check, not a pentest — and the line between them is exactly here.
+            "-exclude-tags", "intrusive,dos,fuzz,brute-force,sqli-error",
+            "-rate-limit", str(DAST_RATE_LIMIT),
+            "-concurrency", str(DAST_CONCURRENCY),
+            "-timeout", "10",
+            "-retries", "1",
+        ],
+        # nuclei exits 0 whether or not it found anything.
+        "ok_returncodes": (0,),
+        # Findings are what it printed, not whether it printed any: a clean
+        # target is a successful scan with no results.
+        "empty_ok": True,
     },
 }
+
+
+def targets() -> list[dict]:
+    """Running applications this installation may scan.
+
+    The URL is shown because an operator picking a target needs to know which
+    system a name means. It is configuration, not a secret — and nothing in a
+    request can name a different one.
+    """
+    return [
+        {"name": name, "url": url}
+        for name, url in sorted(DAST_TARGETS.items())
+    ]
 
 
 class ScanRefused(Exception):
@@ -132,6 +194,7 @@ def scanners() -> list[dict]:
         {
             "key": key,
             "label": spec["label"],
+            "kind": spec.get("kind", SAST),
             # Whether the binary is actually on this machine. Offering a
             # scanner that is not installed produces a failure the user cannot
             # act on; saying so up front produces one they can.
@@ -161,6 +224,26 @@ def _target(project: str) -> Path:
     return path
 
 
+def _dast_target(name: str) -> str:
+    """Resolve a target name to its configured URL, or refuse.
+
+    The URL never comes from the request. A caller that could send one would be
+    pointing this application's scanner at anything it can reach — the SSRF the
+    monitor already refuses, with a louder voice.
+    """
+    if not DAST_TARGETS:
+        raise ScanRefused("Bu kurulumda taranabilir hedef tanımlı değil.")
+
+    url = DAST_TARGETS.get(name)
+
+    if not url:
+        # Not echoed back: reflecting unknown input into an error is how error
+        # messages become a way to probe what exists.
+        raise ScanRefused("Böyle bir hedef tanımlı değil.")
+
+    return url
+
+
 def run(project: str, scanner: str = "bandit") -> ScanResult:
     """Run the analyser and return its SARIF. Raises rather than returning junk."""
     spec = SCANNERS.get(scanner)
@@ -176,27 +259,30 @@ def run(project: str, scanner: str = "bandit") -> ScanResult:
             f"Kurulum: pip install {spec['binary']}"
         )
 
-    target = _target(project)
+    # A project name resolves to a directory; a target name resolves to a URL.
+    # Both come from configuration and neither is ever read from a request.
+    target = _dast_target(project) if spec.get("kind") == DAST else _target(project)
     # A list, and shell=False by omission. There is no command line to inject
     # into because there is no command line — the arguments are passed to the
     # operating system as they are.
     argv = [binary, *spec["args"](target)]
+    timeout = DAST_TIMEOUT_SECONDS if spec.get("kind") == DAST else SCAN_TIMEOUT_SECONDS
 
     try:
         completed = subprocess.run(          # noqa: S603 - argv list, no shell
             argv,
             capture_output=True,
             text=True,
-            timeout=SCAN_TIMEOUT_SECONDS,
             # The analyser has no reason to read stdin, and leaving it open is
             # how a process waits forever on a machine nobody is watching.
             stdin=subprocess.DEVNULL,
-            cwd=str(target),
+            # A URL is not a working directory. For a dynamic scan there is
+            # nothing local to sit in.
+            cwd=str(target) if spec.get("kind") != DAST else None,
+            timeout=timeout,
         )
     except subprocess.TimeoutExpired as exc:
-        raise ScanFailed(
-            f"Tarama {SCAN_TIMEOUT_SECONDS:.0f} saniyede bitmedi."
-        ) from exc
+        raise ScanFailed(f"Tarama {timeout:.0f} saniyede bitmedi.") from exc
     except OSError as exc:
         raise ScanFailed("Tarayıcı çalıştırılamadı.") from exc
 
@@ -213,7 +299,7 @@ def run(project: str, scanner: str = "bandit") -> ScanResult:
     if len(sarif) > SCAN_MAX_OUTPUT:
         raise ScanFailed("Tarama çıktısı beklenenden büyük; içe aktarılmadı.")
 
-    if not sarif.strip():
+    if not sarif.strip() and not spec.get("empty_ok"):
         raise ScanFailed(f"{spec['label']} boş bir rapor döndürdü.")
 
     return ScanResult(scanner=scanner, project=project, sarif=sarif, duration=0.0)

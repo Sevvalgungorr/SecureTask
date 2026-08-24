@@ -355,7 +355,10 @@ def test_the_options_endpoint_reports_what_is_configured(client, analyser):
 
     assert [p["name"] for p in body["projects"]] == ["demo"]
     assert body["projects"][0]["available"] is True
-    assert [s["key"] for s in body["scanners"]] == ["bandit"]
+    # Not "the only scanner": DAST added a second one. What this test is about
+    # is that the static analyser is offered and correctly labelled.
+    bandit = next(s for s in body["scanners"] if s["key"] == "bandit")
+    assert bandit["kind"] == "sast" and bandit["installed"] is True
 
 
 def test_options_are_honest_when_nothing_is_configured(client, monkeypatch):

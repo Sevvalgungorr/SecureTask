@@ -321,17 +321,16 @@
     <div id="scansView" class="hidden">
       <div class="admin-block">
         <div class="list-head">
-          <h2>Statik kod analizi</h2>
-          <span class="badge">SAST</span>
+          <h2 id="scanTitle">Statik kod analizi</h2>
+          <div class="filters">
+            <button class="chip active" id="kindSast" type="button">SAST</button>
+            <button class="chip" id="kindDast" type="button">DAST</button>
+          </div>
         </div>
-        <p class="chart-note scan-lead">
-          Kayıtlı bir projenin kaynak kodunu tarar. Kod <b>çalıştırılmaz</b> —
-          analiz aracı onu söz dizimi ağacına çevirip okur. Bulunanlar
-          Bulgularım'a düşer; aynı bulgu ikinci taramada kopyalanmaz.
-        </p>
+        <p class="chart-note scan-lead" id="scanLead"></p>
         <div class="scan-form">
           <label class="scan-field">
-            <span>Proje</span>
+            <span id="scanTargetLabel">Proje</span>
             <select id="scanProject" class="mini-select"></select>
           </label>
           <label class="scan-field">
