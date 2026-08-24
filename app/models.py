@@ -24,7 +24,35 @@ SLA_DAYS = {"critical": 7, "high": 14, "medium": 30, "low": 90}
 # Both close a finding, but not the same way: one removes the problem, the
 # other keeps it and records that someone decided to live with it.
 ACCEPTED_RISK = "accepted_risk"
+# The developer says it is fixed; the tester has not agreed yet. Deliberately
+# NOT a closed status: the hole is still there until someone checks, and a
+# finding that stops counting the moment its author says so is a finding
+# nobody verifies. The SLA clock keeps running through it.
+AWAITING_RETEST = "awaiting_retest"
 CLOSED_STATUSES = ("fixed", ACCEPTED_RISK)
+
+# What a pentest engagement is doing, as opposed to what a finding is doing.
+# Kept separate on purpose: an engagement can be finished while findings from
+# it are still open, and a finding can be closed long after the report.
+PENTEST_STATUSES = ("planned", "in_progress", "awaiting_retest", "completed", "cancelled")
+
+# The areas a web/API engagement is usually divided into. A starting list, not
+# a fixed one — an engagement writes its own rows and may add to them.
+DEFAULT_SCOPE = (
+    "Authentication",
+    "Authorization",
+    "Session Management",
+    "API Security",
+    "Input Validation",
+    "Business Logic",
+    "File Upload",
+    "Error Handling",
+)
+
+# Scope item states. "not_applicable" is not a gap: deciding an area does not
+# apply is a tested conclusion, so it counts as covered when progress is
+# computed.
+SCOPE_DONE = ("completed", "not_applicable")
 
 SEVERITY_ORDER = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 
@@ -166,6 +194,11 @@ class Finding(Base):
     # visible only to the reporter, and outside the separation-of-duties rule,
     # because one person cannot be two people.
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+    # The engagement this came out of, when it came out of one. Null for
+    # everything a scanner or a monitor filed — which is most of them.
+    pentest_id = Column(
+        Integer, ForeignKey("pentests.id", ondelete="SET NULL"), index=True
+    )
     # Who is expected to do something about it. Null means nobody has taken it,
     # which is a state worth being able to see rather than hiding behind a
     # default.
@@ -315,6 +348,91 @@ class ScanRun(Base):
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
     team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+
+
+class Pentest(Base):
+    """A human-run security assessment, and the process around it.
+
+    This is not a scanner. Nothing here executes anything against a target —
+    the module manages an engagement: what is in scope, how far it has got,
+    what was found, and whether the fixes were verified. The automated half of
+    this application lives in `scan_runs`, and the two are kept apart because
+    they answer to different things: one to a schedule, one to a person.
+    """
+
+    __tablename__ = "pentests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(200), nullable=False)
+    # What is being tested, in the same vocabulary findings use.
+    asset = Column(String(255), nullable=False, server_default="")
+    kind = Column(String(30), nullable=False, server_default="web")
+    # test / staging / …. There is no production value offered by the
+    # interface; an engagement against production is a decision someone types
+    # in deliberately.
+    environment = Column(String(30), nullable=False, server_default="test")
+    status = Column(String(20), nullable=False, server_default="planned")
+    started_on = Column(Date)
+    due_on = Column(Date)
+    description = Column(String(2000))
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Who may see and work it — the same rule findings follow. Null keeps the
+    # engagement personal.
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+    # The person doing the testing, when that is someone other than whoever
+    # created the engagement.
+    tester_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
+
+
+class PentestScope(Base):
+    """One area of an engagement, and whether it has been looked at.
+
+    Progress is computed from these rows rather than typed in. A percentage
+    somebody entered by hand is a number about how they feel; this one is a
+    count of areas actually closed out.
+    """
+
+    __tablename__ = "pentest_scopes"
+
+    id = Column(Integer, primary_key=True, index=True)
+    pentest_id = Column(
+        Integer, ForeignKey("pentests.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    name = Column(String(120), nullable=False)
+    # not_started / in_progress / completed / not_applicable
+    status = Column(String(20), nullable=False, server_default="not_started")
+    note = Column(String(500))
+
+
+class Retest(Base):
+    """One verification attempt on one finding.
+
+    Kept as rows rather than a flag because the history is the point: a finding
+    that failed retest twice before passing is a different story from one that
+    passed first time, and the difference matters when the engagement is read
+    back months later.
+    """
+
+    __tablename__ = "retests"
+
+    id = Column(Integer, primary_key=True, index=True)
+    finding_id = Column(
+        Integer, ForeignKey("findings.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    # passed / failed
+    result = Column(String(10), nullable=False)
+    note = Column(String(1000))
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    tester_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"))
 
 
 class Asset(Base):

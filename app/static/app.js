@@ -109,7 +109,7 @@ const BRACKETS = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const SPARK = '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 2.5l1.7 4.8 4.8 1.7-4.8 1.7L11 15.5 9.3 10.7 4.5 9l4.8-1.7z"/><path d="M18 14l.85 2.4 2.4.85-2.4.85L18 20.5l-.85-2.4-2.4-.85 2.4-.85z"/></svg>';
 const SEV_LABEL = { low: "Düşük", medium: "Orta", high: "Yüksek", critical: "Kritik" };
 const SEV_ORDER = { critical: 0, high: 1, medium: 2, low: 3 };
-const STATUS_LABEL = { open: "Açık", triaged: "Triyaj", fixed: "Düzeltildi", accepted_risk: "Risk kabul" };
+const STATUS_LABEL = { open: "Açık", triaged: "Triyaj", awaiting_retest: "Yeniden test bekliyor", fixed: "Düzeltildi", accepted_risk: "Risk kabul" };
 // Both end the work; only one removes the problem.
 const CLOSED = ["fixed", "accepted_risk"];
 const isClosed = f => CLOSED.includes(f.status);
@@ -1335,8 +1335,11 @@ function teamCard(team) {
   return card;
 }
 
-function fillTeamSelect() {
-  const sel = document.getElementById("teamInput");
+// Aynı liste iki yerde gerekiyor: bulgu ekleme formu ve pentest açma formu.
+// İkinci bir kopya yazmak yerine hangi kutuya dolduracağını parametre alıyor.
+function fillTeamSelect(id = "teamInput") {
+  const sel = document.getElementById(id);
+  if (!sel) return;
   const chosen = sel.value;
   sel.innerHTML = "";
   const personal = document.createElement("option");
@@ -2646,7 +2649,259 @@ document.getElementById("scanStart").onclick = async (e) => {
   e.target.disabled = false;
 };
 
-const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- Pentest -----------------------------------------------------------------
+//
+// Tarayıcı değil: burada hiçbir şey çalıştırılmıyor. Kapsam, ilerleme, insanın
+// bulduğu bulgular ve yeniden test takip ediliyor. Bulgular ayrı bir yerde
+// durmuyor — mevcut bulgu sisteminin içindeler, `pentest_id` ile bağlı.
+
+const PT_STATUS = {
+  planned: "planlandı", in_progress: "sürüyor",
+  awaiting_retest: "yeniden test bekliyor", completed: "tamamlandı",
+  cancelled: "iptal",
+};
+const PT_ENV = { test: "Test", staging: "Staging" };
+const PT_KIND = { web: "Web", api: "API", internal: "İç uygulama" };
+const SCOPE_LABEL = {
+  not_started: "başlanmadı", in_progress: "sürüyor",
+  completed: "tamamlandı", not_applicable: "kapsam dışı",
+};
+
+let ptOpen = null;
+
+function ptCard(pt) {
+  const card = document.createElement("button");
+  card.type = "button";
+  card.className = "pt-card";
+  const head = document.createElement("div");
+  head.className = "pt-card-head";
+  const name = document.createElement("b");
+  name.textContent = pt.name;                    // textContent → XSS'e kapalı
+  const state = document.createElement("span");
+  state.className = "pt-state s-" + pt.status;
+  state.textContent = PT_STATUS[pt.status] || pt.status;
+  head.append(name, state);
+
+  const meta = document.createElement("div");
+  meta.className = "pt-meta";
+  meta.textContent = [
+    PT_KIND[pt.kind] || pt.kind,
+    PT_ENV[pt.environment] || pt.environment,
+    pt.asset,
+  ].filter(Boolean).join(" · ");
+
+  const bar = document.createElement("div");
+  bar.className = "pt-bar sm";
+  const fill = document.createElement("i");
+  animateTo(fill, "width", pt.progress + "%");
+  bar.appendChild(fill);
+
+  const nums = document.createElement("div");
+  nums.className = "pt-nums";
+  const chip = (label, value, cls) => {
+    const el = document.createElement("span");
+    el.className = "pt-chip" + (cls ? " " + cls : "");
+    el.textContent = `${label} ${value}`;
+    nums.appendChild(el);
+  };
+  chip("İlerleme", pt.progress + "%");
+  chip("Bulgu", pt.findings);
+  if (pt.high) chip("Yüksek/kritik", pt.high, "hot");
+  if (pt.awaiting_retest) chip("Yeniden test", pt.awaiting_retest, "warn");
+
+  card.append(head, meta, bar, nums);
+  card.onclick = () => openPentest(pt.id);
+  return card;
+}
+
+async function loadPentests() {
+  const list = document.getElementById("ptList");
+  const rows = await api("/pentests");
+  list.innerHTML = "";
+  document.getElementById("ptEmpty").classList.toggle("hidden", rows.length > 0);
+  rows.forEach(pt => list.appendChild(ptCard(pt)));
+  fillTeamSelect("ptTeam");
+}
+
+function ptShowList() {
+  ptOpen = null;
+  document.getElementById("ptDetail").classList.add("hidden");
+  document.getElementById("ptListBlock").classList.remove("hidden");
+  loadPentests().catch(() => {});
+}
+
+async function openPentest(id) {
+  const pt = await api(`/pentests/${id}`);
+  ptOpen = pt;
+  document.getElementById("ptListBlock").classList.add("hidden");
+  document.getElementById("ptForm").classList.add("hidden");
+  document.getElementById("ptDetail").classList.remove("hidden");
+
+  document.getElementById("ptTitle").textContent = pt.name;
+  document.getElementById("ptSub").textContent = [
+    PT_STATUS[pt.status] || pt.status,
+    PT_ENV[pt.environment] || pt.environment,
+    pt.asset,
+    pt.started_on && pt.due_on ? `${fmtDate(pt.started_on)} → ${fmtDate(pt.due_on)}` : "",
+  ].filter(Boolean).join(" · ");
+
+  animateTo(document.getElementById("ptBarFill"), "width", pt.progress + "%");
+  document.getElementById("ptPct").textContent = pt.progress + "%";
+  document.getElementById("ptScopeBadge").textContent =
+    `${pt.scope_done} / ${pt.scope_total}`;
+
+  const kpis = document.getElementById("ptKpis");
+  kpis.innerHTML = "";
+  kpiCard(kpis, "Kapsam", `${pt.scope_done}/${pt.scope_total}`, "tamamlanan alan");
+  kpiCard(kpis, "Bulgu", String(pt.findings), `${pt.open} açık`);
+  kpiCard(kpis, "Yüksek/kritik", String(pt.high), "öncelikli")
+    .classList.toggle("alert", pt.high > 0);
+  kpiCard(kpis, "Yeniden test", String(pt.awaiting_retest), "doğrulama bekliyor");
+
+  const scope = document.getElementById("ptScope");
+  scope.innerHTML = "";
+  pt.scope.forEach(item => {
+    const row = document.createElement("div");
+    row.className = "scope-row";
+    const name = document.createElement("span");
+    name.className = "scope-name";
+    name.textContent = item.name;
+    const sel = document.createElement("select");
+    sel.className = "mini-select";
+    Object.entries(SCOPE_LABEL).forEach(([value, label]) => {
+      const o = document.createElement("option");
+      o.value = value; o.textContent = label;
+      if (item.status === value) o.selected = true;
+      sel.appendChild(o);
+    });
+    sel.onchange = async () => {
+      try {
+        await api(`/pentests/${pt.id}/scope/${item.id}`, {
+          method: "PUT", body: JSON.stringify({ status: sel.value }),
+        });
+        openPentest(pt.id);
+      } catch (e) { toast(e.message); }
+    };
+    row.append(name, sel);
+    scope.appendChild(row);
+  });
+
+  const host = document.getElementById("ptFindings");
+  host.innerHTML = "";
+  // Gerçek bulgu kayıtları — ikinci bir veri kaynağı yok. Satır bileşeni de
+  // aynı, yani AI, kod görüntüleyici ve SLA burada da çalışıyor.
+  const mine = myFindings.filter(f => f.pentest_id === pt.id);
+  mine.forEach((f, i) => {
+    const row = findingRow(f);
+    row.style.setProperty("--i", Math.min(i, 12));
+    row.querySelector(".actions").prepend(retestButton(f, () => openPentest(pt.id)));
+    host.appendChild(row);
+  });
+}
+
+// Yeniden test akışı. "Düzelttim" bir iddia, kapanış değil: durum
+// awaiting_retest'e geçiyor ve bu hâlâ AÇIK bir durum — SLA saati işlemeye
+// devam ediyor. Sahibinin sözüyle kapanan bir bulgu, kimsenin doğrulamadığı
+// bir bulgudur.
+function retestButton(f, after) {
+  const wrap = document.createElement("span");
+  wrap.className = "retest-wrap";
+
+  if (f.status === "awaiting_retest") {
+    [["passed", "Geçti", "ok"], ["failed", "Kaldı", "bad"]].forEach(([result, label, cls]) => {
+      const b = document.createElement("button");
+      b.className = "btn sm retest " + cls;
+      b.type = "button";
+      b.textContent = label;
+      b.onclick = async () => {
+        try {
+          await api(`/findings/${f.id}/retest/result`, {
+            method: "POST", body: JSON.stringify({ result }),
+          });
+          toast(result === "passed" ? "Yeniden test geçti" : "Yeniden test başarısız");
+          await loadFindings();
+          after();
+        } catch (e) { toast(e.message); }
+      };
+      wrap.appendChild(b);
+    });
+    return wrap;
+  }
+
+  if (!isClosed(f)) {
+    const b = document.createElement("button");
+    b.className = "btn ghost sm";
+    b.type = "button";
+    b.textContent = "Yeniden test iste";
+    b.onclick = async () => {
+      try {
+        await api(`/findings/${f.id}/retest`, { method: "POST" });
+        toast("Yeniden test istendi");
+        await loadFindings();
+        after();
+      } catch (e) { toast(e.message); }
+    };
+    wrap.appendChild(b);
+  }
+
+  return wrap;
+}
+
+document.getElementById("ptNew").onclick = () =>
+  document.getElementById("ptForm").classList.toggle("hidden");
+document.getElementById("ptBack").onclick = ptShowList;
+
+document.getElementById("ptForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const team = document.getElementById("ptTeam").value;
+  try {
+    const pt = await api("/pentests", {
+      method: "POST",
+      body: JSON.stringify({
+        name: document.getElementById("ptName").value.trim(),
+        asset: document.getElementById("ptAsset").value.trim(),
+        description: document.getElementById("ptDesc").value.trim() || null,
+        kind: document.getElementById("ptKind").value,
+        environment: document.getElementById("ptEnv").value,
+        started_on: document.getElementById("ptStart").value || null,
+        due_on: document.getElementById("ptDue").value || null,
+        team_id: team ? Number(team) : null,
+      }),
+    });
+    e.target.reset();
+    e.target.classList.add("hidden");
+    toast("Pentest açıldı");
+    openPentest(pt.id);
+  } catch (err) { toast(err.message); }
+};
+
+document.getElementById("ptAddFinding").onclick = () =>
+  document.getElementById("ptFindingForm").classList.toggle("hidden");
+
+document.getElementById("ptFindingForm").onsubmit = async (e) => {
+  e.preventDefault();
+  if (!ptOpen) return;
+  try {
+    await api(`/pentests/${ptOpen.id}/findings`, {
+      method: "POST",
+      body: JSON.stringify({
+        title: document.getElementById("pfTitle").value.trim(),
+        description: document.getElementById("pfDesc").value.trim() || null,
+        asset: document.getElementById("pfAsset").value.trim(),
+        severity: document.getElementById("pfSev").value,
+        status: "open", team_id: null, due_date: null,
+        accepted_reason: null, accepted_until: null,
+      }),
+    });
+    e.target.reset();
+    e.target.classList.add("hidden");
+    toast("Bulgu eklendi");
+    await loadFindings();
+    openPentest(ptOpen.id);
+  } catch (err) { toast(err.message); }
+};
+
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", pentest: "pentestView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -2669,6 +2924,7 @@ function setupTabs() {
       if (v === "analyst") loadFindings().catch(() => {});
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "scans") loadScans().catch(() => {});
+      if (v === "pentest") loadFindings().then(ptShowList).catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
