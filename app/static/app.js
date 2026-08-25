@@ -2802,6 +2802,21 @@ async function loadScans() {
   const list = document.getElementById("scanHistory");
   list.innerHTML = "";
   runs.forEach(r => list.appendChild(scanRow(r)));
+
+  // Boş bir liste, sebebini söylemeyen bir boşluk. Hangi tarama türüne
+  // bakıldığını da tekrar ediyor: dört sekme var ve geçmiş sekmeye göre
+  // süzülüyor — "hiç tarama yok" ile "bu türde tarama yok" farklı.
+  if (!runs.length) {
+    const empty = document.createElement("li");
+    empty.className = "empty";
+    empty.textContent = `Bu projede henüz ${conf.chip} taraması çalışmadı.`;
+    const sub = document.createElement("span");
+    sub.className = "empty-sub";
+    sub.textContent = "Yukarıdan başlattığında sonuçlar burada listelenir.";
+    empty.append(document.createElement("br"), sub);
+    list.appendChild(empty);
+  }
+
   renderLatest(runs[0] || null);
 
   // Süren bir tarama varsa bitene kadar izle. Bittiğinde bulgular da
@@ -3097,9 +3112,60 @@ document.getElementById("ptFindingForm").onsubmit = async (e) => {
 };
 
 const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", pentest: "pentestView", devsecops: "devopsView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+// --- Kabuk: daraltma ve çekmece ----------------------------------------------
+//
+// Tercih hatırlanıyor. Menüyü her açılışta yeniden daraltmak, kaydedilmemiş
+// bir ayardan beterdir: kullanıcı onu bir kez seçtiğini sanır.
+const SIDE_KEY = "securetask_side_min";
+
+function applySideState() {
+  const min = localStorage.getItem(SIDE_KEY) === "1";
+  const app = document.getElementById("appView");
+  const toggle = document.getElementById("sideToggle");
+  app.classList.toggle("side-min", min);
+  toggle.setAttribute("aria-expanded", min ? "false" : "true");
+  toggle.title = min ? "Menüyü genişlet" : "Menüyü daralt";
+  toggle.querySelector(".nav-txt").textContent = min ? "Genişlet" : "Menüyü daralt";
+}
+
+function closeDrawer() {
+  document.body.classList.remove("nav-open");
+  document.getElementById("navVeil").classList.add("hidden");
+  document.getElementById("navBurger").setAttribute("aria-expanded", "false");
+}
+
+function setupShell() {
+  document.getElementById("sideToggle").onclick = () => {
+    localStorage.setItem(SIDE_KEY, document.getElementById("appView")
+      .classList.contains("side-min") ? "0" : "1");
+    applySideState();
+  };
+
+  const burger = document.getElementById("navBurger");
+  const veil = document.getElementById("navVeil");
+
+  burger.onclick = () => {
+    const open = document.body.classList.toggle("nav-open");
+    veil.classList.toggle("hidden", !open);
+    burger.setAttribute("aria-expanded", open ? "true" : "false");
+  };
+
+  veil.onclick = closeDrawer;
+  // Escape ile kapanmalı: açık bir çekmece, arkasındaki her şeyi tıklanamaz
+  // yapıyor ve klavyeyle çıkışı olmayan bir tuzak olmamalı.
+  addEventListener("keydown", e => {
+    if (e.key === "Escape" && document.body.classList.contains("nav-open")) closeDrawer();
+  });
+
+  applySideState();
+}
+
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
+      // Bir bölüm seçildiğinde çekmece kapanır. Açık kalsaydı, gidilen sayfa
+      // menünün arkasında kalırdı.
+      closeDrawer();
       document.querySelectorAll(".tab").forEach(b => b.classList.remove("active"));
       btn.classList.add("active");
       const v = btn.dataset.view;
@@ -3111,24 +3177,33 @@ function setupTabs() {
       // seferde hiç görünmezdi.
       view.classList.remove("view-enter");
       requestAnimationFrame(() => view.classList.add("view-enter"));
+      // Yükleme geri bildirimi tek yerde. Her yükleyiciye ayrı ayrı eklemek,
+      // bir gün birinin unutulması demekti; burada bölümün kendisi meşgul.
+      const busy = (promise) => {
+        view.classList.add("view-busy");
+        promise.finally(() => view.classList.remove("view-busy"));
+        return promise;
+      };
+
       // Pano bulgu listesinden beslenir: sekmeye her dönüşte ikisi de tazelenir.
-      if (v === "dash") loadFindings().then(loadDash).catch(() => {});
-      if (v === "risk") loadFindings().catch(() => {});
+      if (v === "dash") busy(loadFindings().then(loadDash)).catch(() => {});
+      if (v === "risk") busy(loadFindings()).catch(() => {});
       // Modele hiçbir istek gitmiyor: saklanmış analizler zaten
       // bulgularla birlikte geliyor.
-      if (v === "analyst") loadFindings().catch(() => {});
-      if (v === "admin") loadAdmin().catch(() => {});
-      if (v === "scans") loadScans().catch(() => {});
-      if (v === "pentest") loadFindings().then(ptShowList).catch(() => {});
-      if (v === "devsecops") loadDevSecOps().catch(() => {});
-      if (v === "assets") loadAssets().catch(() => {});
-      if (v === "teams") loadTeams().catch(() => {});
-      if (v === "history") loadHistory().catch(() => {});
-      if (v === "security") loadSecurity().then(loadAiProvider).catch(() => {});
+      if (v === "analyst") busy(loadFindings()).catch(() => {});
+      if (v === "admin") busy(loadAdmin()).catch(() => {});
+      if (v === "scans") busy(loadScans()).catch(() => {});
+      if (v === "pentest") busy(loadFindings().then(ptShowList)).catch(() => {});
+      if (v === "devsecops") busy(loadDevSecOps()).catch(() => {});
+      if (v === "assets") busy(loadAssets()).catch(() => {});
+      if (v === "teams") busy(loadTeams()).catch(() => {});
+      if (v === "history") busy(loadHistory()).catch(() => {});
+      if (v === "security") busy(loadSecurity().then(loadAiProvider)).catch(() => {});
     };
   });
 }
 setupTabs();
+setupShell();
 
 // Giriş yolları sunucudan sorulur: bir sağlayıcı eklemek yapılandırma işi
 // olmalı, giriş sayfasını düzenleme işi değil.
@@ -3191,6 +3266,7 @@ async function render() {
     document.getElementById("hello").textContent = "Merhaba, " + (me.username || "") + " 👋";
     // Everyone gets Bulgularım + Geçmişim; the Yönetim tab is admin-only.
     document.getElementById("tabs").classList.remove("hidden");
+    document.getElementById("navBurger").classList.remove("hidden");
     document.getElementById("adminTab").classList.toggle("hidden", !isAdmin);
     // Before the findings: a row cannot say which team it belongs to, or who
     // may accept its risk, until we know which teams this person is in.
@@ -3204,7 +3280,21 @@ async function render() {
   } catch (e) {
     // A 401 already signed us out inside api(); anything else leaves us signed
     // in but unable to load the profile, which the user deserves to be told.
-    if (token()) toast("Profil yüklenemedi — sunucuya ulaşılamıyor");
+    if (!token()) return;
+
+    toast("Profil yüklenemedi — " + (e.message || "sunucuya ulaşılamıyor"));
+
+    // Ve yarım bir ekran bırakılmıyor. Profil gelmediğinde menü hiç
+    // çizilmiyor, ama panellerin işaretlemesi zaten sayfada duruyordu:
+    // ortada gezinmesi olmayan, içeriği boş bir uygulama kalıyordu — çalışıyor
+    // gibi duran ama hiçbir şey yapamayan bir ekran. Bunun yerine ne olduğu
+    // yazıyor ve yeniden denenebiliyor.
+    const view = document.getElementById("appView");
+    view.classList.add("hidden");
+    const box = document.getElementById("loadError");
+    box.classList.remove("hidden");
+    box.querySelector(".load-why").textContent =
+      e.message || "Sunucuya ulaşılamıyor.";
   }
 }
 
@@ -3478,6 +3568,11 @@ async function loadDevSecOps() {
     renderPipeline(open);
   }
 }
+
+document.getElementById("loadRetry").onclick = () => {
+  document.getElementById("loadError").classList.add("hidden");
+  render();
+};
 
 document.getElementById("dsNew").onclick = async () => {
   const form = document.getElementById("dsForm");
