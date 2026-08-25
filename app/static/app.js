@@ -71,7 +71,24 @@ async function api(path, options = {}) {
     err.status = res.status;
     throw err;
   }
-  return res.status === 200 ? res.json() : null;
+  // Gövde varsa gövde. Eskiden yalnızca 200 okunuyordu ve her başarılı ama
+  // 200 olmayan cevap sessizce `null` dönüyordu — 201 döndüren ilk uç
+  // eklendiğinde (CI jetonu üretme) çağıran taraf `null.token` okumaya
+  // çalıştı. Durum kodunu gövdenin varlığıyla karıştırmak, bir gün mutlaka
+  // patlayan bir varsayım.
+  if (res.status === 204) return null;
+
+  const text = await res.text();
+
+  if (!text) return null;
+
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Başarılı ama JSON olmayan bir cevap. Çağıranlar bir nesne bekliyor;
+    // metni uydurup nesne gibi göstermektense yok demek dürüst.
+    return null;
+  }
 }
 
 // Local sign-out: forget our token and fall back to the login screen. Used when
@@ -3518,6 +3535,21 @@ function showToken(created) {
   const host = document.getElementById("dsToken");
   host.innerHTML = "";
   host.classList.remove("hidden");
+
+  // Jeton yalnızca bir kez var: onu gösteremiyorsak bunu söylemek zorundayız.
+  // Boş bir kutu, kullanıcının kaydettiğini sanıp kaydetmemesi demek — ve
+  // geri okunabilir bir yer olmadığı için o jeton kaybolmuş olur.
+  if (!created || !created.token) {
+    const warn = document.createElement("b");
+    warn.textContent = "Jeton alınamadı";
+    const why = document.createElement("p");
+    why.className = "chart-note";
+    why.textContent =
+      "Depo kaydedilmiş olabilir ama jeton bu cevapta gelmedi. Jeton bir daha "
+      + "gösterilemediği için kaydı silip yeniden oluşturman gerekiyor.";
+    host.append(warn, why);
+    return;
+  }
 
   const head = document.createElement("b");
   head.textContent = "Jeton bir kez gösteriliyor";
