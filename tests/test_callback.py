@@ -48,6 +48,21 @@ CLAIMS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def over_https(client):
+    """Talk to the app over https, the way a browser will.
+
+    The session cookie holding the PKCE verifier is Secure by default
+    (SESSION_HTTPS_ONLY), so over http it is set and then never sent back:
+    /callback finds no code_verifier and refuses the login. These tests passed
+    on this machine only because the developer's .env turns that flag off —
+    they were reading a local config file, not the application, which is the
+    same mistake that once let a provider test assert on someone's .env.
+    """
+    client.base_url = client.base_url.copy_with(scheme="https")
+    return client
+
+
 @pytest.fixture()
 def exchange(monkeypatch):
     """Stand in for the provider's token endpoint. Set `reply` per test."""
