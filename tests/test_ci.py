@@ -538,3 +538,64 @@ def test_the_gate_can_be_read_back_but_the_findings_cannot(client, integration):
         headers={"X-SecureTask-Token": token},
     )
     assert other.status_code == 403
+
+
+# --- the contract the interface depends on -----------------------------------
+
+
+def test_registering_returns_the_token_in_the_body(client, db):
+    """The endpoint the "Jeton üret" button calls, with the values a person
+    actually types.
+
+    Pinned as a contract because the interface has exactly one chance to read
+    this token: there is no second call that can fetch it, so a response the
+    caller cannot read is a token that is gone.
+    """
+    from app import scanner
+
+    client.login_as("alice")
+    original = dict(scanner.DAST_TARGETS)
+    scanner.DAST_TARGETS.clear()
+    scanner.DAST_TARGETS["securetask-test"] = "http://127.0.0.1:8010"
+
+    try:
+        response = client.post("/ci/integrations", json={
+            "repository": "Sevvalgungorr/SecureTask",
+            "project": "securetask",
+            "dast_target": "securetask-test",
+        })
+    finally:
+        scanner.DAST_TARGETS.clear()
+        scanner.DAST_TARGETS.update(original)
+
+    assert response.status_code == 201, response.text
+
+    body = response.json()
+
+    assert body["repository"] == "Sevvalgungorr/SecureTask"
+    assert body["project"] == "securetask"
+    assert body["dast_target"] == "securetask-test"
+    assert body["token"].startswith(ci.TOKEN_PREFIX)
+    # And the row holds the digest, not the value.
+    assert db.query(CiIntegration).one().token_hash == ci.hash_token(body["token"])
+
+
+def test_the_client_reads_a_body_from_any_successful_response(client):
+    """A regression guard for a real bug, in the layer that had it.
+
+    `api()` used to return the parsed body only for HTTP 200 and `null` for
+    every other success. That was invisible until the first endpoint answering
+    201 arrived — registering a repository — and the caller then read `.token`
+    off `null`. The frontend has no test runner, so the guard is here: the
+    pattern that confused a status code with the presence of a body must not
+    come back.
+    """
+    from pathlib import Path
+
+    source = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(
+        encoding="utf-8"
+    )
+
+    assert "res.status === 200 ? res.json() : null" not in source
+    # And it still declines to invent a body where there is none.
+    assert "res.status === 204" in source
