@@ -3079,7 +3079,7 @@ document.getElementById("ptFindingForm").onsubmit = async (e) => {
   } catch (err) { toast(err.message); }
 };
 
-const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", pentest: "pentestView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
+const VIEWS = { dash: "dashView", my: "myView", risk: "riskView", analyst: "analystView", scans: "scansView", pentest: "pentestView", devsecops: "devopsView", assets: "assetsView", teams: "teamsView", history: "historyView", security: "securityView", admin: "adminView" };
 function setupTabs() {
   document.querySelectorAll(".tab").forEach(btn => {
     btn.onclick = () => {
@@ -3103,6 +3103,7 @@ function setupTabs() {
       if (v === "admin") loadAdmin().catch(() => {});
       if (v === "scans") loadScans().catch(() => {});
       if (v === "pentest") loadFindings().then(ptShowList).catch(() => {});
+      if (v === "devsecops") loadDevSecOps().catch(() => {});
       if (v === "assets") loadAssets().catch(() => {});
       if (v === "teams") loadTeams().catch(() => {});
       if (v === "history") loadHistory().catch(() => {});
@@ -3191,3 +3192,358 @@ async function render() {
 }
 
 render();
+
+
+// --- DevSecOps ---------------------------------------------------------------
+//
+// Taramalar sayfasının kopyası değil. Orada bir aracın ne bulduğu var; burada
+// bir commit'in çıkabilir olup olmadığı. Ekranın taşıdığı asıl bilgi bir liste
+// değil, bir sıra: hangi adıma kadar gelindi ve nerede durdu.
+
+// Sunucu her zaman ISO-8601 ve UTC gönderiyor; tarayıcı yerel saate çeviriyor.
+// Ham damgayı göstermek, "06:52Z" ile "09:52" arasındaki farkı okuyucuya
+// hesaplatmak olurdu.
+function fmtDateTime(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (isNaN(d)) return "";
+  return d.toLocaleString("tr-TR", {
+    day: "2-digit", month: "2-digit", year: "2-digit",
+    hour: "2-digit", minute: "2-digit",
+  });
+}
+
+const GATE_LABEL = {
+  passed: "Geçti", failed: "Geçilemedi", incomplete: "Tamamlanmadı",
+};
+const RELEASE_LABEL = {
+  ready: "Hazır", not_ready: "Hazır değil", incomplete: "Tamamlanmadı",
+};
+const DEPLOY_LABEL = {
+  started: "Başladı", succeeded: "Başarılı", failed: "Başarısız",
+};
+const SCAN_STEP = {
+  sast: "SAST", sca: "SCA", secret: "Secret Scan", dast: "DAST",
+};
+
+// Bir adımın üç hâli var ve üçüncüsü olmadan diğer ikisi yanlış okunuyor:
+// "çalıştı ve temiz", "çalıştı ve buldu", "çalışmadı". Sonuncusunu yeşile
+// yuvarlamak, yapılmamış bir kontrolü yapılmış göstermek olurdu.
+const STEP_OK = "ok", STEP_BAD = "bad", STEP_UNKNOWN = "unknown", STEP_IDLE = "idle";
+
+let dsPipelines = [];
+let dsIntegrations = [];
+let dsOpenId = null;
+
+function stepState(scan) {
+  if (!scan) return STEP_IDLE;
+  if (scan.status === "completed") return scan.blocking ? STEP_BAD : STEP_OK;
+  if (scan.status === "queued" || scan.status === "running") return STEP_IDLE;
+  return STEP_UNKNOWN;
+}
+
+function stepNote(scan) {
+  if (!scan) return "çalışmadı";
+  if (scan.status === "scanner_unavailable") return "tarayıcı kurulu değil";
+  if (scan.status === "failed") return scan.error ? scan.error.slice(0, 80) : "başarısız";
+  if (scan.status !== "completed") return SCAN_LABEL[scan.status] || scan.status;
+  if (scan.blocking) return `${scan.blocking} kritik`;
+  return `${scan.total} bulgu`;
+}
+
+function dsStep(label, state, note, extra) {
+  const li = document.createElement("li");
+  li.className = "ds-step s-" + state + (extra ? " " + extra : "");
+  const dot = document.createElement("span");
+  dot.className = "ds-dot";
+  // Renk tek başına bilgi taşımıyor: her noktanın yanında ne olduğu yazıyor.
+  dot.textContent = state === STEP_OK ? "✓" : state === STEP_BAD ? "!" : state === STEP_UNKNOWN ? "?" : "·";
+  const body = document.createElement("div");
+  const name = document.createElement("b");
+  name.textContent = label;
+  const sub = document.createElement("span");
+  sub.className = "ds-step-note";
+  sub.textContent = note;
+  body.append(name, sub);
+  li.append(dot, body);
+  return li;
+}
+
+function renderPipeline(run) {
+  document.getElementById("dsPipelineBlock").classList.remove("hidden");
+  document.getElementById("dsPipelineRun").textContent = "#" + run.external_run_id;
+  document.getElementById("dsPipelineTitle").textContent =
+    dsOpenId ? "Pipeline" : "Son pipeline";
+
+  const meta = document.getElementById("dsMeta");
+  meta.innerHTML = "";
+  const fact = (label, value) => {
+    if (!value) return;
+    const box = document.createElement("div");
+    box.className = "ds-fact";
+    const l = document.createElement("span"); l.className = "s-lbl"; l.textContent = label;
+    const v = document.createElement("b"); v.textContent = value;
+    box.append(l, v);
+    meta.appendChild(box);
+  };
+  fact("Depo", run.repository);
+  fact("Dal", run.branch);
+  fact("Commit", (run.commit_sha || "").slice(0, 8));
+  if (run.pull_request) fact("PR", "#" + run.pull_request);
+  fact("Başlangıç", fmtDateTime(run.started_at));
+
+  const byKind = {};
+  (run.scans || []).forEach(s => { byKind[s.kind] = s; });
+
+  const flow = document.getElementById("dsFlow");
+  flow.innerHTML = "";
+
+  const ci = document.createElement("div");
+  ci.className = "ds-lane";
+  const ciHead = document.createElement("h3");
+  ciHead.textContent = "CI";
+  const ciList = document.createElement("ol");
+  ciList.className = "ds-steps";
+  ["sast", "sca", "secret"].forEach(kind => {
+    ciList.appendChild(dsStep(SCAN_STEP[kind], stepState(byKind[kind]), stepNote(byKind[kind])));
+  });
+  ciList.appendChild(dsStep(
+    "Security Gate",
+    run.security_gate === "passed" ? STEP_OK
+      : run.security_gate === "failed" ? STEP_BAD : STEP_UNKNOWN,
+    run.gate_reason || GATE_LABEL[run.security_gate] || run.security_gate,
+    "ds-gate",
+  ));
+  ci.append(ciHead, ciList);
+
+  const cd = document.createElement("div");
+  cd.className = "ds-lane";
+  const cdHead = document.createElement("h3");
+  cdHead.textContent = "CD";
+  const cdList = document.createElement("ol");
+  cdList.className = "ds-steps";
+  cdList.appendChild(dsStep(
+    "Staging dağıtımı",
+    run.deployment_status === "succeeded" ? STEP_OK
+      : run.deployment_status === "failed" ? STEP_BAD
+      : run.deployment_status ? STEP_IDLE : STEP_IDLE,
+    run.deployment_status
+      ? (DEPLOY_LABEL[run.deployment_status] || run.deployment_status)
+        + (run.environment ? ` · ${run.environment}` : "")
+      : "henüz dağıtım bildirilmedi",
+  ));
+  cdList.appendChild(dsStep("DAST", stepState(byKind.dast), stepNote(byKind.dast)));
+  cd.append(cdHead, cdList);
+
+  flow.append(ci, cd);
+
+  const verdicts = document.getElementById("dsVerdicts");
+  verdicts.innerHTML = "";
+  [
+    ["Security Gate", run.security_gate, GATE_LABEL, run.gate_reason],
+    ["Release Security", run.release_status, RELEASE_LABEL, run.release_reason],
+  ].forEach(([title, value, labels, reason]) => {
+    const box = document.createElement("div");
+    box.className = "ds-verdict v-" + (value || "incomplete");
+    const t = document.createElement("span"); t.className = "s-lbl"; t.textContent = title;
+    const v = document.createElement("b"); v.textContent = labels[value] || value || "—";
+    const r = document.createElement("span");
+    r.className = "ds-why";
+    // Gerekçe her zaman yazıyor. Yalnızca "başarısız" diyen bir kapı, insanı
+    // dört tarama raporunu okuyup ne demek istediğini bulmaya gönderir.
+    r.textContent = reason || "";
+    box.append(t, v, r);
+    verdicts.appendChild(box);
+  });
+
+  const link = document.createElement("button");
+  link.className = "btn ghost sm";
+  link.type = "button";
+  link.textContent = "Bulguları gör";
+  link.onclick = () => document.querySelector('.tab[data-view="my"]').click();
+  verdicts.appendChild(link);
+}
+
+function dsHistoryRow(run) {
+  const li = document.createElement("li");
+  li.className = "ds-run r-" + (run.release_status || "incomplete");
+  const left = document.createElement("div");
+  const head = document.createElement("b");
+  head.textContent = `#${run.external_run_id}`;
+  const sub = document.createElement("div");
+  sub.className = "scan-sub";
+  sub.textContent =
+    `${run.branch || "?"} · ${(run.commit_sha || "").slice(0, 8) || "?"}`
+    + ` · ${fmtDateTime(run.started_at)}`;
+  left.append(head, sub);
+
+  const right = document.createElement("div");
+  right.className = "ds-run-tags";
+  const tag = (text, cls) => {
+    const s = document.createElement("span");
+    s.className = "ds-tag " + cls;
+    s.textContent = text;
+    right.appendChild(s);
+  };
+  tag("Gate: " + (GATE_LABEL[run.security_gate] || run.security_gate), "g-" + run.security_gate);
+  tag("Release: " + (RELEASE_LABEL[run.release_status] || run.release_status), "r-" + run.release_status);
+
+  li.append(left, right);
+  li.onclick = () => { dsOpenId = run.id; renderPipeline(run); window.scrollTo({ top: 0 }); };
+  return li;
+}
+
+function renderIntegrations() {
+  const host = document.getElementById("dsIntegrations");
+  host.innerHTML = "";
+
+  if (!dsIntegrations.length) {
+    const p = document.createElement("p");
+    p.className = "chart-note";
+    p.textContent = "Henüz bağlı depo yok.";
+    host.appendChild(p);
+    return;
+  }
+
+  dsIntegrations.forEach(row => {
+    const card = document.createElement("div");
+    card.className = "ds-int";
+    const name = document.createElement("b");
+    name.textContent = row.repository;
+    const sub = document.createElement("span");
+    sub.className = "scan-sub";
+    sub.textContent =
+      `proje ${row.project}`
+      + (row.dast_target ? ` · DAST hedefi ${row.dast_target}` : " · DAST hedefi yok")
+      + (row.last_used_at ? ` · son kullanım ${fmtDateTime(row.last_used_at)}` : " · hiç kullanılmadı");
+    const del = document.createElement("button");
+    del.className = "icon-btn del-x";
+    del.type = "button";
+    del.title = "Jetonu iptal et";
+    del.textContent = "×";
+    del.onclick = async () => {
+      if (!confirm(`${row.repository} için CI jetonu iptal edilsin mi?`)) return;
+      try {
+        await api(`/ci/integrations/${row.id}`, { method: "DELETE" });
+        toast("Jeton iptal edildi");
+        await loadDevSecOps();
+      } catch (e) { toast(e.message); }
+    };
+    const body = document.createElement("div");
+    body.append(name, sub);
+    card.append(body, del);
+    host.appendChild(card);
+  });
+}
+
+async function loadDevSecOps() {
+  try {
+    dsIntegrations = await api("/ci/integrations");
+    dsPipelines = await api("/pipelines");
+  } catch (e) {
+    toast("DevSecOps verisi alınamadı: " + e.message);
+    return;
+  }
+
+  renderIntegrations();
+
+  const list = document.getElementById("dsHistory");
+  list.innerHTML = "";
+  dsPipelines.forEach(run => list.appendChild(dsHistoryRow(run)));
+
+  document.getElementById("dsHistoryBlock").classList.toggle("hidden", !dsPipelines.length);
+  document.getElementById("dsEmpty").classList.toggle("hidden", dsPipelines.length > 0);
+  document.getElementById("dsPipelineBlock").classList.toggle("hidden", !dsPipelines.length);
+
+  if (dsPipelines.length) {
+    const open = dsPipelines.find(r => r.id === dsOpenId) || dsPipelines[0];
+    dsOpenId = null;
+    renderPipeline(open);
+  }
+}
+
+document.getElementById("dsNew").onclick = async () => {
+  const form = document.getElementById("dsForm");
+  form.classList.toggle("hidden");
+  document.getElementById("dsToken").classList.add("hidden");
+
+  if (form.classList.contains("hidden")) return;
+
+  // Hedef listesi sunucudan geliyor ve bir metin kutusu değil. Buraya adres
+  // yazılabilseydi, tarayıcı bir alan uzaklıkta olurdu.
+  const sel = document.getElementById("dsTarget");
+  sel.innerHTML = "";
+  const none = document.createElement("option");
+  none.value = ""; none.textContent = "— yok —";
+  sel.appendChild(none);
+
+  try {
+    const opts = await api("/scan/options");
+    (opts.targets || []).forEach(t => {
+      const o = document.createElement("option");
+      o.value = t.name;
+      o.textContent = `${t.name} — ${t.url}`;
+      sel.appendChild(o);
+    });
+  } catch (e) { /* hedef yoksa yalnızca "yok" kalır */ }
+
+  document.getElementById("dsRepo").focus();
+};
+
+document.getElementById("dsCancel").onclick = () => {
+  document.getElementById("dsForm").classList.add("hidden");
+};
+
+document.getElementById("dsForm").onsubmit = async (e) => {
+  e.preventDefault();
+  const body = {
+    repository: document.getElementById("dsRepo").value.trim(),
+    project: document.getElementById("dsProject").value.trim(),
+    dast_target: document.getElementById("dsTarget").value,
+  };
+
+  try {
+    const created = await api("/ci/integrations", {
+      method: "POST", body: JSON.stringify(body),
+    });
+    document.getElementById("dsForm").classList.add("hidden");
+    document.getElementById("dsRepo").value = "";
+    document.getElementById("dsProject").value = "";
+    showToken(created);
+    await loadDevSecOps();
+  } catch (err) { toast(err.message); }
+};
+
+function showToken(created) {
+  const host = document.getElementById("dsToken");
+  host.innerHTML = "";
+  host.classList.remove("hidden");
+
+  const head = document.createElement("b");
+  head.textContent = "Jeton bir kez gösteriliyor";
+  const why = document.createElement("p");
+  why.className = "chart-note";
+  // Saklanan şey bir SHA-256; geri okunabilecek bir değer yok. Bunu yazmak,
+  // "kaydetmeyi unuttum, tekrar göster" isteğinin cevabını da vermiş oluyor.
+  why.textContent =
+    "SecureTask bu jetonu saklamıyor — yalnızca SHA-256 özetini tutuyor, o yüzden "
+    + "bir daha gösterilemez. GitHub deposunda Settings → Secrets and variables → "
+    + "Actions altına SECURETASK_CI_TOKEN olarak ekle.";
+
+  const box = document.createElement("code");
+  box.className = "ds-token-value";
+  box.textContent = created.token;
+
+  const copy = document.createElement("button");
+  copy.className = "btn sm";
+  copy.type = "button";
+  copy.textContent = "Kopyala";
+  copy.onclick = async () => {
+    try {
+      await navigator.clipboard.writeText(created.token);
+      toast("Kopyalandı");
+    } catch (e) { toast("Kopyalanamadı — elle seç"); }
+  };
+
+  host.append(head, why, box, copy);
+}

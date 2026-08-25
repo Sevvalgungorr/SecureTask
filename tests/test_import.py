@@ -60,8 +60,11 @@ def test_rescanning_does_not_duplicate(client):
     _post(client, [_result()])
 
     second = _post(client, [_result()]).json()
+    # `blocking` is how many of this report's findings are critical and still
+    # open — what a CI security gate judges on. Zero here: the fixture is a
+    # medium.
     assert second == {"tool": "nuclei", "created": 0, "reopened": 0, "escalated": 0,
-                      "unchanged": 1, "kept_accepted": 0, "skipped": 0}
+                      "unchanged": 1, "kept_accepted": 0, "skipped": 0, "blocking": 0}
     assert len(client.get("/findings").json()) == 1
 
 

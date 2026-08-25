@@ -371,6 +371,22 @@ class ScanRun(Base):
     total = Column(Integer, nullable=False, server_default="0")
     # Why it failed, in words a person can act on. Empty on success.
     error = Column(String(400), nullable=False, server_default="")
+    # How many of the findings this run reported are **critical and still
+    # open**. Counted at ingest time rather than asked for later, because
+    # "critical findings in this tenant" is a different question: it includes
+    # other repositories, older scans and things this run never looked at. A
+    # gate has to judge what this run found.
+    #
+    # An accepted risk does not count. Someone argued for it with a second
+    # factor and an expiry; a gate that fails anyway makes the acceptance
+    # meaningless and teaches people to switch the gate off.
+    blocking = Column(Integer, nullable=False, server_default="0")
+    # The pipeline this run belongs to, when it came from one. Null for a scan
+    # somebody started from the Scans page — the same row either way, because a
+    # run is a run.
+    pipeline_id = Column(
+        Integer, ForeignKey("pipeline_runs.id", ondelete="CASCADE"), index=True
+    )
     owner_id = Column(
         Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -508,6 +524,172 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False)
     oidc_issuer = Column(String(255), nullable=False, index=True)
     oidc_sub = Column(String(255), nullable=False, index=True)
+
+
+# --- The pipeline ------------------------------------------------------------
+#
+# A scan is one tool's opinion. A pipeline is the decision that follows from
+# all of them together, at a particular commit, on the way to a particular
+# environment — and it is a different thing to record, because "did bandit
+# find something" and "may this go out" are different questions.
+#
+# What is deliberately NOT here: anything that deploys. There is no host, no
+# key, no command, no cloud credential in these tables, because SecureTask does
+# not deploy. The external CI/CD system does that and tells this application
+# what happened; this application decides what it means.
+
+# The scans a pipeline has to have completed before a gate can say anything at
+# all. Missing one is not a pass and not a failure — it is INCOMPLETE, which is
+# the honest third answer.
+REQUIRED_SCANS = ("sast", "sca", "secret")
+
+GATE_PASSED = "passed"
+GATE_FAILED = "failed"
+GATE_INCOMPLETE = "incomplete"
+
+# What blocks a gate. Only the top band, on purpose: a gate that fails on
+# anything at all is a gate somebody turns off in a week.
+GATE_BLOCKS_AT = "critical"
+
+RELEASE_READY = "ready"
+RELEASE_NOT_READY = "not_ready"
+RELEASE_INCOMPLETE = "incomplete"
+
+DEPLOY_STARTED = "started"
+DEPLOY_SUCCEEDED = "succeeded"
+DEPLOY_FAILED = "failed"
+DEPLOY_STATES = (DEPLOY_STARTED, DEPLOY_SUCCEEDED, DEPLOY_FAILED)
+
+# The one environment this version will record a deployment to. Production is
+# absent for the same reason it is absent from a pentest engagement: shipping
+# to it is a decision someone writes deliberately, not one they pick from a
+# list a machine can send.
+DEPLOY_ENVIRONMENTS = ("staging",)
+
+
+class CiIntegration(Base):
+    """One repository, allowed to file findings into one tenant.
+
+    Two things live here, and both are refusals of something simpler.
+
+    **The token is not stored.** Only its SHA-256 is. A credential this
+    application can read back is a credential in a database dump, a backup, a
+    support session and a screenshot — and there is no operation that needs the
+    original, because verifying one only needs to hash what was presented.
+
+    **The repository name in a request is not trusted.** It is looked up here,
+    and the tenant comes from *this row*, not from the request. Without that, a
+    CI job holding any valid token could name someone else's repository and
+    file findings into their list.
+    """
+
+    __tablename__ = "ci_integrations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    # "owner/name" as the provider writes it. Unique: two rows claiming one
+    # repository would make which tenant receives its findings a matter of
+    # which row was read first.
+    repository = Column(String(200), nullable=False, unique=True, index=True)
+    provider = Column(String(30), nullable=False, server_default="github")
+    # What this repository is called inside SecureTask — the name that lands in
+    # ScanRun.project. Set here by a person, never by CI.
+    project = Column(String(80), nullable=False, server_default="")
+    # SHA-256 of the token. Indexed because verification is a lookup by hash:
+    # the presented token is hashed and matched, so there is no scan and no
+    # comparison against a stored secret.
+    token_hash = Column(String(64), nullable=False, unique=True, index=True)
+    # Shown in the interface so a person can tell two integrations apart
+    # without either token being shown again. Not derived from the token.
+    label = Column(String(80), nullable=False, server_default="")
+    # Which registered DAST target this repository's staging deployment maps
+    # to, by NAME. The URL is resolved from DAST_TARGETS at scan time and never
+    # travels in a request — the same rule the scan endpoint already follows.
+    dast_target = Column(String(80), nullable=False, server_default="")
+    is_active = Column(Boolean, nullable=False, server_default="true")
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_used_at = Column(DateTime(timezone=True))
+    # The tenant. Findings filed through this integration belong here, and a
+    # request cannot name anywhere else.
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
+
+
+class PipelineRun(Base):
+    """One run of a repository's pipeline, and what it is allowed to conclude.
+
+    Kept separately from `scan_runs` because it answers a different question.
+    A scan run says what a tool reported; this says whether the commit may
+    proceed — which depends on several tools, on whether the required ones ran
+    at all, and later on whether the thing that was deployed still stood up to
+    being scanned.
+
+    The two halves are deliberately separate columns rather than one status:
+    **`security_gate` is about the code, `release_status` is about the
+    release**, and collapsing them is how "the deployment succeeded" comes to
+    be read as "the release is safe".
+    """
+
+    __tablename__ = "pipeline_runs"
+    __table_args__ = (
+        # Idempotency, enforced by the database rather than by remembering to
+        # check. A CI provider retries; a retried request must land on the row
+        # it already made, not a second one.
+        UniqueConstraint("integration_id", "external_run_id", name="uq_pipeline_run"),
+    )
+
+    id = Column(Integer, primary_key=True, index=True)
+    integration_id = Column(
+        Integer,
+        ForeignKey("ci_integrations.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    # Echoed from the integration rather than the request, so a row cannot
+    # claim a repository its token does not own.
+    repository = Column(String(200), nullable=False)
+    provider = Column(String(30), nullable=False, server_default="github")
+    branch = Column(String(200), nullable=False, server_default="")
+    commit_sha = Column(String(64), nullable=False, server_default="")
+    pull_request = Column(Integer)
+    # The provider's own identifier for the run. Together with the integration
+    # this is what makes a retry idempotent.
+    external_run_id = Column(String(120), nullable=False)
+    external_url = Column(String(500), nullable=False, server_default="")
+
+    status = Column(String(20), nullable=False, server_default="running")
+    started_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    completed_at = Column(DateTime(timezone=True))
+
+    # --- the code half ---
+    security_gate = Column(String(20), nullable=False, server_default=GATE_INCOMPLETE)
+    # Why, in words a person can act on. A gate that says only "failed" sends
+    # someone to read four scan reports to find out what it meant.
+    gate_reason = Column(String(300), nullable=False, server_default="")
+
+    # --- the release half ---
+    environment = Column(String(30), nullable=False, server_default="")
+    deployment_status = Column(String(20), nullable=False, server_default="")
+    deployment_ref = Column(String(120), nullable=False, server_default="")
+    deployed_at = Column(DateTime(timezone=True))
+    # Not a copy of the DAST scan's status: "the scanner is not installed" and
+    # "the scan found something" are different answers here, and both have to
+    # survive into the release decision.
+    dast_status = Column(String(30), nullable=False, server_default="")
+    release_status = Column(
+        String(20), nullable=False, server_default=RELEASE_INCOMPLETE
+    )
+    release_reason = Column(String(300), nullable=False, server_default="")
+
+    owner_id = Column(
+        Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    team_id = Column(Integer, ForeignKey("teams.id", ondelete="SET NULL"), index=True)
 
 
 class AuditLog(Base):

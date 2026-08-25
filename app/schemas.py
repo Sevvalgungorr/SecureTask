@@ -152,6 +152,195 @@ class RetestCreate(BaseModel):
     note: str | None = None
 
 
+# --- CI/CD ------------------------------------------------------------------
+#
+# What a pipeline is allowed to say. Every field a machine could use to reach
+# somewhere it should not is absent by design rather than validated:
+#
+#   * no `team_id` or `owner_id` — the tenant comes from the registration
+#   * no `url`, `host` or `target` — the DAST address is resolved server-side
+#   * no `path`, `command` or `script` — nothing here starts a process
+#   * no `severity` override — the scanner's report decides, then a person does
+
+ScanType = Literal["sast", "sca", "secret"]
+DeploymentState = Literal["started", "succeeded", "failed"]
+# Only staging. Production deployment tracking is absent for the same reason
+# production is absent from a pentest engagement's environment list.
+Environment = Literal["staging"]
+
+
+class CiIntegrationCreate(BaseModel):
+    """Registering a repository. Done by a person, never by CI."""
+
+    repository: str
+    project: str = ""
+    label: str = ""
+    # A registered DAST target NAME, checked against DAST_TARGETS in the
+    # endpoint. Never a URL: a field that could carry one would let whoever
+    # sets up an integration point the scanner at anything reachable.
+    dast_target: str = ""
+    team_id: int | None = None
+
+
+class CiIntegrationResponse(BaseModel):
+    """What may be shown about an integration.
+
+    There is no token field. The value exists exactly once, in the response
+    that creates it, and is never readable again — a credential that can be
+    fetched back is a credential in every screenshot of this page.
+    """
+
+    id: int
+    repository: str
+    provider: str
+    project: str
+    label: str
+    dast_target: str
+    is_active: bool
+    created_at: datetime
+    last_used_at: datetime | None = None
+    team_id: int | None = None
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class CiIntegrationCreated(CiIntegrationResponse):
+    """The one response that carries a token, and says so."""
+
+    token: str
+    note: str = (
+        "Bu jeton bir daha gösterilmeyecek. GitHub Secrets içine "
+        "SECURETASK_CI_TOKEN olarak kaydet."
+    )
+
+
+class PipelineContext(BaseModel):
+    """Which run a report belongs to. Sent with everything CI posts."""
+
+    repository: str
+    external_run_id: str
+    branch: str = ""
+    commit_sha: str = ""
+    pull_request: int | None = None
+    external_url: str = ""
+
+
+class CiScanResult(PipelineContext):
+    """One scanner's output, as the pipeline already produced it.
+
+    `payload` is the scanner's own report, unmodified — SARIF from bandit, JSON
+    from pip-audit, JSON from gitleaks. It goes to the reader that already
+    exists for that format, so nothing about how a report becomes a finding is
+    duplicated here.
+
+    There is no `scanner` field. It is derived from `scan_type` server-side:
+    a report that could name its own tool could file findings as "bandit" and
+    have them close a real bandit scan's findings on the next run.
+    """
+
+    scan_type: ScanType
+    # Whether the scanner itself ran. False means it could not — not installed,
+    # crashed, timed out — and the run is recorded as such rather than as an
+    # empty, clean-looking result.
+    succeeded: bool = True
+    error: str = ""
+    payload: str = ""
+
+
+class CiDeployment(PipelineContext):
+    """A report that an external system deployed something.
+
+    Not an instruction. There is nothing in this model an application could
+    deploy *from*: no host, no credential, no artefact, no command.
+    """
+
+    state: DeploymentState
+    environment: Environment = "staging"
+    # The external system's own identifier for the deployment, for tracing back.
+    deployment_ref: str = ""
+
+
+class CiDastRequest(PipelineContext):
+    """Ask for a post-deployment scan of the environment that was deployed.
+
+    The target is a registered NAME resolved from the integration, and the URL
+    comes from DAST_TARGETS on the server — the same rule the Scans page
+    follows, for the same reason.
+    """
+
+    environment: Environment = "staging"
+
+
+class ScanRunResponse(BaseModel):
+    id: int
+    kind: str
+    scanner: str
+    status: str
+    created: int = 0
+    reopened: int = 0
+    unchanged: int = 0
+    resolved: int = 0
+    total: int = 0
+    blocking: int = 0
+    note: str = ""
+    error: str = ""
+    started_at: datetime
+    finished_at: datetime | None = None
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class PipelineResponse(BaseModel):
+    id: int
+    repository: str
+    provider: str
+    branch: str
+    commit_sha: str
+    pull_request: int | None = None
+    external_run_id: str
+    external_url: str = ""
+    status: str
+    started_at: datetime
+    completed_at: datetime | None = None
+    # The code half and the release half, kept apart on purpose: a successful
+    # deployment is not a safe release, and one field for both is how the two
+    # come to be read as one.
+    security_gate: str
+    gate_reason: str = ""
+    environment: str = ""
+    deployment_status: str = ""
+    deployed_at: datetime | None = None
+    dast_status: str = ""
+    release_status: str
+    release_reason: str = ""
+    scans: list[ScanRunResponse] = []
+
+    model_config = {
+        "from_attributes": True
+    }
+
+
+class GateResponse(BaseModel):
+    """What CI asks for after reporting. Deliberately small.
+
+    A pipeline may know whether it passed and why. It may not read the findings
+    — that needs a person with a session, and a token that could would be a
+    read credential for the whole tenant sitting in a repository's secrets.
+    """
+
+    security_gate: str
+    gate_reason: str = ""
+    release_status: str
+    release_reason: str = ""
+    blocking: int = 0
+    completed_scans: list[str] = []
+    missing_scans: list[str] = []
+
+
 class AssetCreate(BaseModel):
     # Hostname, optionally with a port. Validated in the endpoint, where the
     # name can actually be resolved and checked against the network policy.

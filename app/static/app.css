@@ -805,6 +805,151 @@
   }
   .scan-note { color: var(--warn, var(--muted)); }
 
+
+  /* --- DevSecOps -----------------------------------------------------------
+     Ekranın taşıdığı asıl bilgi bir liste değil, bir sıra: hangi adıma kadar
+     gelindi ve nerede durdu. O yüzden düz tablo değil, iki şerit — biri kodun,
+     biri sürümün. */
+  .ds-integrations { display: grid; gap: .4rem; margin-top: .6rem; }
+  .ds-int {
+    display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+    padding: .55rem .8rem; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  /* Ad ve ayrıntı satırı alt alta. Kapsayıcı flex olduğu için iç blok da
+     satır olarak diziliyordu ve ikisi birbirine yapışıyordu. */
+  .ds-int > div { display: flex; flex-direction: column; gap: .1rem; min-width: 0; }
+  .ds-int b { font-size: .92rem; overflow-wrap: anywhere; }
+  .ds-form {
+    display: flex; gap: .8rem; align-items: flex-end; flex-wrap: wrap;
+    margin-top: .8rem; padding-top: .8rem; border-top: 1px solid var(--line);
+  }
+  .ds-form input {
+    padding: .45rem .6rem; border-radius: 9px;
+    border: 1px solid var(--line); background: var(--bg); color: var(--fg);
+    font: inherit; font-size: .86rem;
+  }
+  .ds-token {
+    margin-top: .9rem; padding: .8rem .9rem; border-radius: 12px;
+    background: var(--accent-soft); border: 1px solid var(--line);
+  }
+  .ds-token .chart-note { margin: .3rem 0 .6rem; }
+  .ds-token-value {
+    display: block; margin-bottom: .6rem; padding: .5rem .65rem;
+    border-radius: 9px; background: var(--card); border: 1px solid var(--line);
+    font-family: var(--mono, ui-monospace, monospace); font-size: .8rem;
+    overflow-wrap: anywhere;
+  }
+
+  .ds-meta { display: flex; gap: .8rem; flex-wrap: wrap; margin-bottom: .9rem; }
+  .ds-fact {
+    flex: 1 1 8rem; padding: .55rem .8rem; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line);
+    display: flex; flex-direction: column; gap: .15rem;
+  }
+  .ds-fact .s-lbl { font-size: .7rem; color: var(--faint); font-weight: 700; }
+  .ds-fact b { font-size: .92rem; overflow-wrap: anywhere; }
+
+  .ds-flow { display: grid; grid-template-columns: 1fr 1fr; gap: .9rem; }
+  @media (max-width: 720px) { .ds-flow { grid-template-columns: 1fr; } }
+  .ds-lane {
+    padding: .8rem .9rem; border-radius: 14px;
+    background: var(--card); border: 1px solid var(--line);
+  }
+  .ds-lane h3 {
+    margin: 0 0 .6rem; font-size: .72rem; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--faint);
+  }
+  .ds-steps { list-style: none; margin: 0; padding: 0; }
+  .ds-step {
+    display: flex; gap: .6rem; align-items: flex-start;
+    padding: .45rem 0; position: relative;
+  }
+  /* Adımları birbirine bağlayan çizgi: sıranın kendisi bilgi, ve ayrı ayrı
+     duran kutular onu göstermiyor. */
+  .ds-step:not(:last-child)::before {
+    content: ""; position: absolute; left: .62rem; top: 1.7rem; bottom: -.25rem;
+    width: 2px; background: var(--line);
+  }
+  .ds-dot {
+    flex: 0 0 auto; width: 1.25rem; height: 1.25rem; border-radius: 999px;
+    display: grid; place-items: center; font-size: .72rem; font-weight: 800;
+    background: var(--line-2); color: var(--faint);
+    border: 1px solid var(--line); z-index: 1;
+  }
+  .ds-step.s-ok .ds-dot {
+    background: color-mix(in srgb, var(--ok) 18%, transparent);
+    color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, transparent);
+  }
+  .ds-step.s-bad .ds-dot {
+    background: color-mix(in srgb, var(--danger) 16%, transparent);
+    color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent);
+  }
+  /* Bilinmeyen ne yeşil ne kırmızı. Yapılmamış bir kontrolü yeşile yuvarlamak
+     bu ekranın önlemek için var olduğu hata. */
+  /* --warn bu paletde indigo, yani vurgu rengiyle aynı aile: "bilinmiyor"
+     normal bir durum gibi okunuyordu. SLA rampasındaki kehribar zaten tam
+     olarak bu anlamı taşıyor. */
+  .ds-step.s-unknown .ds-dot {
+    background: color-mix(in srgb, var(--sla-warm) 16%, transparent);
+    color: var(--sla-warm);
+    border-color: color-mix(in srgb, var(--sla-warm) 40%, transparent);
+  }
+  .ds-step b { display: block; font-size: .88rem; }
+  .ds-step-note { display: block; font-size: .75rem; color: var(--muted); }
+  .ds-step.ds-gate b { font-weight: 800; }
+
+  .ds-verdicts {
+    display: flex; gap: .8rem; flex-wrap: wrap; align-items: stretch;
+    margin-top: .9rem;
+  }
+  /* Karar kutuları arasındaki düğme kart yüksekliğine uzayıp üçüncü bir karar
+     gibi duruyordu; kendi boyunda ve ortada kalıyor. */
+  .ds-verdicts > .btn { flex: 0 0 auto; align-self: center; }
+  .ds-verdict {
+    flex: 1 1 14rem; padding: .7rem .85rem; border-radius: 12px;
+    background: var(--card); border: 1px solid var(--line);
+    border-left-width: 3px;
+    display: flex; flex-direction: column; gap: .15rem;
+  }
+  .ds-verdict .s-lbl { font-size: .7rem; color: var(--faint); font-weight: 700; }
+  .ds-verdict b { font-size: 1.05rem; }
+  .ds-why { font-size: .76rem; color: var(--muted); }
+  .ds-verdict.v-passed, .ds-verdict.v-ready { border-left-color: var(--ok); }
+  .ds-verdict.v-passed b, .ds-verdict.v-ready b { color: var(--ok); }
+  .ds-verdict.v-failed, .ds-verdict.v-not_ready { border-left-color: var(--danger); }
+  .ds-verdict.v-failed b, .ds-verdict.v-not_ready b { color: var(--danger); }
+  .ds-verdict.v-incomplete { border-left-color: var(--sla-warm); }
+  .ds-verdict.v-incomplete b { color: var(--sla-warm); }
+
+  .ds-history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
+  .ds-run {
+    display: flex; align-items: center; justify-content: space-between; gap: .8rem;
+    padding: .6rem .8rem; border-radius: 12px; cursor: pointer;
+    background: var(--card); border: 1px solid var(--line);
+    border-left: 3px solid var(--line);
+  }
+  .ds-run:hover { border-color: var(--accent); }
+  .ds-run.r-ready { border-left-color: var(--ok); }
+  .ds-run.r-not_ready { border-left-color: var(--danger); }
+  .ds-run.r-incomplete { border-left-color: var(--sla-warm); }
+  .ds-run-tags { display: flex; gap: .4rem; flex-wrap: wrap; justify-content: flex-end; }
+  .ds-tag {
+    font-size: .68rem; font-weight: 700; padding: .14rem .5rem;
+    border-radius: 999px; white-space: nowrap;
+    color: var(--muted); background: var(--line-2);
+  }
+  .ds-tag.g-passed, .ds-tag.r-ready {
+    color: var(--ok); background: color-mix(in srgb, var(--ok) 14%, transparent);
+  }
+  .ds-tag.g-failed, .ds-tag.r-not_ready {
+    color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent);
+  }
+  .ds-tag.g-incomplete, .ds-tag.r-incomplete {
+    color: var(--sla-warm);
+    background: color-mix(in srgb, var(--sla-warm) 16%, transparent);
+  }
+
   .scan-history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
   .scan-item {
     display: flex; align-items: center; justify-content: space-between; gap: .8rem;
@@ -1014,9 +1159,17 @@
   .tabs {
     display: inline-flex; gap: .2rem; padding: .28rem; margin-bottom: 1.3rem;
     background: var(--card); border: 1px solid var(--line); border-radius: 13px; box-shadow: var(--sh-sm);
+    /* On birinci sekme bir masaüstü penceresine sığmıyor. Etiketler tek satır
+       kaldığı için taşan şerit sayfayı yatay kaydırtıyordu — satır kendi
+       içinde sarılıyor, gövde asla yana kaymıyor. */
+    flex-wrap: wrap; max-width: 100%;
   }
   .tab { font: inherit; font-weight: 600; font-size: .88rem; cursor: pointer; border: none;
-    background: transparent; color: var(--muted); padding: .42rem 1rem; border-radius: 9px; }
+    background: transparent; color: var(--muted); padding: .42rem 1rem; border-radius: 9px;
+    /* Bir sekme daha eklendiğinde "AI Analyst" ikiye bölünüp bütün çubuğun
+       yüksekliğini değiştirdi. Etiketler tek satır kalıyor; sığmazsa satır
+       zaten kaydırılıyor. */
+    white-space: nowrap; }
   .tab:hover { color: var(--ink); }
   /* Five tabs no longer fit a phone: scroll the row rather than clip the last one. */
   @media (max-width: 620px) {
