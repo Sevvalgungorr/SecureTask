@@ -9,6 +9,11 @@
 <body>
 
 <header>
+  <!-- Dar ekranda menü bir çekmeceye dönüşüyor; bu onu açan düğme. Geniş
+       ekranda hiç görünmüyor, çünkü orada menü zaten duruyor. -->
+  <button class="nav-burger hidden" id="navBurger" type="button" aria-label="Menü" aria-expanded="false">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+  </button>
   <div class="brand">
     <span class="logo"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span>
     Secure<b>Task</b>
@@ -21,6 +26,10 @@
     <stop offset="0" stop-color="#6d3bf5"/><stop offset="1" stop-color="#4f46e5"/>
   </linearGradient>
 </defs></svg>
+
+<!-- Çekmece açıkken arkadaki perde: dokunulunca kapanır, ve içeriğin
+     arkada durduğunu görünür kılar. -->
+<div class="nav-veil hidden" id="navVeil"></div>
 
 <main>
   <!-- Logged out -->
@@ -67,23 +76,62 @@
     </div>
   </section>
 
+  <!-- Profil gelmediğinde. Yarım çizilmiş bir uygulama, çalışıyor gibi duran
+       ama hiçbir şey yapamayan bir ekrandır. -->
+  <section id="loadError" class="load-error hidden">
+    <div class="ico">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 9v4M12 17h.01"/><circle cx="12" cy="12" r="9"/></svg>
+    </div>
+    <h2>Uygulama yüklenemedi</h2>
+    <p class="load-why"></p>
+    <button class="btn" id="loadRetry" type="button">Yeniden dene</button>
+  </section>
+
   <!-- Logged in -->
   <section id="appView" class="hidden">
 
-    <div class="tabs hidden" id="tabs">
-      <button class="tab active" data-view="dash" type="button">Pano</button>
-      <button class="tab" data-view="my" type="button">Bulgularım</button>
-      <button class="tab" data-view="risk" type="button">Risk</button>
-      <button class="tab tab-ai" data-view="analyst" type="button"><span class="ai-mark" id="tabMark"></span>AI Analyst</button>
-      <button class="tab" data-view="scans" type="button">Taramalar</button>
-      <button class="tab" data-view="pentest" type="button">Pentest</button>
-      <button class="tab" data-view="devsecops" type="button">DevSecOps</button>
-      <button class="tab" data-view="assets" type="button">Varlıklar</button>
-      <button class="tab" data-view="teams" type="button">Ekipler</button>
-      <button class="tab" data-view="history" type="button">Geçmişim</button>
-      <button class="tab" data-view="security" type="button">Güvenlik</button>
-      <button class="tab" data-view="admin" id="adminTab" type="button">Yönetim</button>
-    </div>
+    <!-- Yan menü. On bir bölüm yatay bir şeride sığmıyordu: "Yönetim" ikinci
+         satıra düşüyor ve çubuğun yüksekliği değişiyordu. Menü aynı düğmeleri
+         taşıyor (aynı sınıf, aynı data-view), yalnızca yerleşimi değişti —
+         yönlendirici koduna dokunulmadı.
+
+         Gruplar keyfi değil: bir bölüm ya durumu gösteriyor, ya bir kontrol
+         çalıştırıyor, ya da kurulumu yönetiyor. On bir eşit düğme yerine üç
+         soru. -->
+    <nav class="side hidden" id="tabs" aria-label="Bölümler">
+      <div class="side-scroll">
+        <div class="nav-group">
+          <span class="nav-head">Genel</span>
+          <button class="tab" data-view="dash" type="button" title="Pano"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 13h8V3H3zM13 21h8V11h-8zM13 7h8V3h-8zM3 21h8v-4H3z"/></svg></span><span class="nav-txt">Pano</span></button>
+          <button class="tab" data-view="my" type="button" title="Bulgularım"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M9 11l3 3 8-8"/><path d="M20 12v7a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/></svg></span><span class="nav-txt">Bulgularım</span></button>
+          <button class="tab" data-view="risk" type="button" title="Risk"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0Z"/><path d="M12 9v4M12 17h.01"/></svg></span><span class="nav-txt">Risk</span></button>
+          <button class="tab tab-ai" data-view="analyst" type="button" title="AI Analyst"><span class="ai-mark" id="tabMark"></span><span class="nav-txt">AI Analyst</span></button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-head">Güvenlik</span>
+          <button class="tab" data-view="scans" type="button" title="Taramalar"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg></span><span class="nav-txt">Taramalar</span></button>
+          <button class="tab" data-view="pentest" type="button" title="Pentest"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.8-3.8a6 6 0 0 1-7.9 7.9l-6.9 6.9a2.1 2.1 0 0 1-3-3l6.9-6.9a6 6 0 0 1 7.9-7.9z"/></svg></span><span class="nav-txt">Pentest</span></button>
+          <button class="tab" data-view="devsecops" type="button" title="DevSecOps"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg></span><span class="nav-txt">DevSecOps</span></button>
+        </div>
+
+        <div class="nav-group">
+          <span class="nav-head">Yönetim</span>
+          <button class="tab" data-view="assets" type="button" title="Varlıklar"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></svg></span><span class="nav-txt">Varlıklar</span></button>
+          <button class="tab" data-view="teams" type="button" title="Ekipler"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M16 20v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 20v-2a4 4 0 0 0-3-3.9"/></svg></span><span class="nav-txt">Ekipler</span></button>
+          <button class="tab" data-view="history" type="button" title="Geçmişim"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 8v4l3 2"/></svg></span><span class="nav-txt">Geçmişim</span></button>
+          <button class="tab" data-view="security" type="button" title="Güvenlik"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg></span><span class="nav-txt">Güvenlik</span></button>
+          <button class="tab" id="adminTab" data-view="admin" type="button" title="Yönetim"><span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15a3 3 0 1 0 0-6 3 3 0 0 0 0 6z"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></span><span class="nav-txt">Yönetim</span></button>
+        </div>
+      </div>
+
+      <!-- Daraltma. Etiketler gider, simgeler kalır — ve her düğmenin title'ı
+           zaten adını taşıdığı için daraltılmış hâlde de ne olduğu okunabilir. -->
+      <button class="side-toggle" id="sideToggle" type="button" aria-expanded="true">
+        <span class="nav-ico"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="m15 18-6-6 6-6"/></svg></span>
+        <span class="nav-txt">Menüyü daralt</span>
+      </button>
+    </nav>
 
     <div id="dashView">
       <div class="kpis">
@@ -109,18 +157,25 @@
         </div>
       </div>
 
+      <!-- İki sütun, her biri kendi içinde akıyor. Panelleri doğrudan ızgaraya
+           koymak satır satır hizalıyordu: kısa bir panel, yanındaki uzun
+           panelin boyunda bir satır açıyor ve altında kocaman bir boşluk
+           bırakıyordu. -->
       <div class="dash-grid">
-      <div class="admin-block">
+        <div class="dash-col">
+          <div class="admin-block">
         <div class="list-head"><h2>Aktivite</h2><span class="badge">son 14 gün</span></div>
         <div class="chart" id="actChart"></div>
         <p class="chart-note" id="actNote"></p>
       </div>
+          <div class="admin-block">
+        <div class="list-head"><h2>Son işlemler</h2><span class="badge">son 8</span></div>
+        <ul class="audit" id="recentAudit"></ul>
+        <p class="chart-note">Tamamı <b>Geçmişim</b> sekmesinde.</p>
+      </div>
+        </div>
 
-      <!-- İki kısa panel bir sütunda: ızgarada tek tek dursalardı her biri
-           yanındaki uzun panelin boyunda bir satır açar, altlarında iki tane
-           boşluk kalırdı. Aynı soruyu iki açıdan soruyorlar — biri neyi
-           taşıdığımızı, öbürü ne zamana kadar. -->
-      <div class="dash-col">
+        <div class="dash-col">
         <div class="admin-block">
           <div class="list-head"><h2>Kritiklik dağılımı</h2><span class="badge">açık bulgular</span></div>
           <div class="stack" id="sevStack"></div>
@@ -132,15 +187,8 @@
           <div class="sla-buckets" id="slaBuckets"></div>
           <p class="chart-note" id="slaNote"></p>
         </div>
-      </div>
 
-      <div class="admin-block">
-        <div class="list-head"><h2>Son işlemler</h2><span class="badge">son 8</span></div>
-        <ul class="audit" id="recentAudit"></ul>
-        <p class="chart-note">Tamamı <b>Geçmişim</b> sekmesinde.</p>
-      </div>
-
-      <div class="admin-block hidden" id="denyBlock">
+        <div class="admin-block hidden" id="denyBlock">
         <div class="list-head"><h2>Reddedilen erişimler</h2><span class="badge">son 14 gün</span></div>
         <div class="chart" id="denyChart"></div>
         <p class="chart-note">
@@ -148,6 +196,7 @@
           Yalnızca yöneticiler görebilir.
         </p>
       </div>
+        </div>
       </div>
     </div>
 
