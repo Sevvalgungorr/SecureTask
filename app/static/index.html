@@ -77,6 +77,7 @@
       <button class="tab tab-ai" data-view="analyst" type="button"><span class="ai-mark" id="tabMark"></span>AI Analyst</button>
       <button class="tab" data-view="scans" type="button">Taramalar</button>
       <button class="tab" data-view="pentest" type="button">Pentest</button>
+      <button class="tab" data-view="devsecops" type="button">DevSecOps</button>
       <button class="tab" data-view="assets" type="button">Varlıklar</button>
       <button class="tab" data-view="teams" type="button">Ekipler</button>
       <button class="tab" data-view="history" type="button">Geçmişim</button>
@@ -351,6 +352,63 @@
       <div class="admin-block">
         <div class="list-head"><h2>Geçmiş</h2><span class="badge">son 10</span></div>
         <ul class="scan-history" id="scanHistory"></ul>
+      </div>
+    </div>
+
+    <!-- DevSecOps. Taramalar sayfasının kopyası değil: orada bir aracın ne
+         bulduğu var, burada bir commit'in çıkabilir olup olmadığı. İkisi ayrı
+         sorular ve ayrı cevapları var. -->
+    <div id="devopsView" class="hidden">
+      <div class="admin-block" id="dsSetup">
+        <div class="list-head">
+          <h2>CI/CD entegrasyonu</h2>
+          <button class="btn sm" id="dsNew" type="button">+ Depo bağla</button>
+        </div>
+        <p class="chart-note">
+          SecureTask dağıtım yapmaz. Deployment'ı GitHub Actions ya da başka bir
+          harici sistem yapar; SecureTask güvenlik taramalarının sonucunu alır,
+          Security Gate'i hesaplar ve sürümün çıkmaya hazır olup olmadığını
+          söyler.
+        </p>
+        <div class="ds-integrations" id="dsIntegrations"></div>
+        <form class="ds-form hidden" id="dsForm">
+          <label class="scan-field">
+            <span>Depo</span>
+            <input id="dsRepo" placeholder="sahip/ad" autocomplete="off" required>
+          </label>
+          <label class="scan-field">
+            <span>Proje adı</span>
+            <input id="dsProject" placeholder="securetask" autocomplete="off">
+          </label>
+          <label class="scan-field">
+            <span>DAST hedefi</span>
+            <select id="dsTarget" class="mini-select"></select>
+          </label>
+          <button class="btn" id="dsCreate" type="submit">Jeton üret</button>
+          <button class="btn ghost" id="dsCancel" type="button">Vazgeç</button>
+        </form>
+        <div class="ds-token hidden" id="dsToken"></div>
+      </div>
+
+      <div class="admin-block hidden" id="dsPipelineBlock">
+        <div class="list-head">
+          <h2 id="dsPipelineTitle">Son pipeline</h2>
+          <span class="badge" id="dsPipelineRun"></span>
+        </div>
+        <div class="ds-meta" id="dsMeta"></div>
+        <div class="ds-flow" id="dsFlow"></div>
+        <div class="ds-verdicts" id="dsVerdicts"></div>
+      </div>
+
+      <div class="admin-block hidden" id="dsHistoryBlock">
+        <div class="list-head"><h2>Pipeline geçmişi</h2><span class="badge">son 20</span></div>
+        <ul class="ds-history" id="dsHistory"></ul>
+      </div>
+
+      <div class="empty hidden" id="dsEmpty">
+        Henüz bir pipeline çalışmadı.<br>
+        <span class="empty-sub">Bir depo bağladıktan sonra GitHub Actions
+        sonuçları buraya düşer.</span>
       </div>
     </div>
 

@@ -56,6 +56,11 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Düzeltmenin doğrulanmadan kapatılması | `awaiting_retest` **açık** bir durum: SLA saati işler, bulgu sayılır; kapanış yalnızca testçinin verdiği sonuçla olur ve denemeler geçmişte durur | `test_pentest.py` (16 test) |
 | **DAST'ın keyfi bir adrese yöneltilmesi (SSRF)** | Arayüzde URL kutusu yok; istek hedef **adı** gönderiyor, URL yapılandırmadan çözülüyor; yalnızca `http(s)`; yönlendirme ve out-of-band kapalı | `test_dast.py` (16 test) |
 | **Taramanın sunucuda keyfi dizin okuması / komut çalıştırması** | İstek proje **adı** gönderiyor, yolu yapılandırmadan geliyor; argümanlar liste, kabuk yok; analiz edilen kod çalıştırılmıyor (AST okunuyor) | `test_scanner.py` (12 test) |
+| **CI jetonunun başka bir tenant'a bulgu yazması** | Depo adı istekten değil **kayıttan** okunuyor; tenant kayda bağlı; uyuşmazlık 403 ve açıklanmıyor | `test_ci.py` (23 test) |
+| **CI jetonunun okuma kimliği olması** | Jeton yalnızca rapor gönderebiliyor ve kapının kararını okuyabiliyor; bulguları, durumları, başka depoları göremiyor — ayrı başlık, oturum yoluyla hiç kesişmiyor | `test_ci.py::test_a_session_cannot_post_results_and_a_ci_token_cannot_read_findings` |
+| **Jetonun saklanması / geri okunabilmesi** | Yalnızca SHA-256 tutuluyor, doğrulama o özet üzerinden bir arama; düz metin yalnızca üretildiği cevapta var | `test_ci.py::test_the_token_is_shown_once_and_never_stored` |
+| **Yapılmamış kontrolün yeşil görünmesi** | Zorunlu tarama çalışmadıysa Security Gate `INCOMPLETE`; Nuclei kurulu değilse Release `INCOMPLETE` — sahte PASSED üretilmiyor | `test_ci.py` · `test_release.py` (19 test) |
+| **SecureTask'ın bir dağıtım motoruna dönüşmesi** | Modelde host/kimlik/komut alanı yok, üretim ortamı seçilemiyor, ve bu yolda süreç başlatılırsa test düşüyor | `test_release.py::test_nothing_in_the_deployment_path_starts_a_process` |
 | **Sızmış bir secret'ın SecureTask'a kaydedilmesi** | Ham değer hiçbir katmana girmiyor: tarayıcı `--redact` ile kendi içinde siliyor, ayrıştırıcı kalanı maskeliyor ve temizleyemediği satırı atıyor; secret bulgusunda kod görüntüleyici dosyayı okumuyor | `test_secrets.py` (18 test) — maskelenmemiş bir rapor tüm hattan geçirilip değer veritabanında, API cevaplarında, denetim günlüğünde ve AI isteminde aranıyor |
 | **Bağımlılık denetiminin denetlediği kodu çalıştırması** | `--no-deps` ve `--disable-pip`: grafik çözülmüyor, dolayısıyla hiçbir paket indirilmiyor ve hiçbir `setup.py` çalışmıyor | `test_sca.py` (16 test) |
 | **Eksik taramanın temiz görünmesi** | Sabitlenmemiş bağımlılık satırları atlanıyor ve **kaç tanesinin atlandığı taramanın satırında yazıyor**; kurulu olmayan tarayıcı `scanner_unavailable` olarak ayrı gösteriliyor, başarılı sonuç taklit edilmiyor | `test_sca.py` · `test_secrets.py` |
@@ -204,6 +209,140 @@ koşu da satır bırakıyor: izi olmayan bir tarama, hiç başlatılmamış olan
 ayırt edilemez.
 
 **DAST ve aktif ağ taraması kapsam dışı.** Bu yalnızca statik analiz.
+
+### DevSecOps / CI-CD entegrasyonu
+
+![DevSecOps](docs/images/devsecops.png)
+
+Taramalar bir aracın ne bulduğunu söylüyor. Bir pipeline, o commit'in
+**çıkabilir olup olmadığını** söylüyor — ve bu, hepsinin birlikte ne dediğine,
+zorunlu olanların çalışıp çalışmadığına, ve sonra dağıtılan şeyin taranmaya
+dayanıp dayanmadığına bağlı.
+
+```
+CI:   Push/PR → Tests → SAST → SCA → Secret Scan → Security Gate
+CD:   Security Gate → Harici staging dağıtımı → DAST → Release Security
+```
+
+> **SecureTask bir dağıtım motoru değildir.** Dağıtımı harici CI/CD platformu
+> yapar; SecureTask güvenlik kontrollerini, bulguları ve sürümün güvenlik
+> durumunu yönetir. Bu kod tabanında SSH anahtarı, kubeconfig, bulut kimlik
+> bilgisi ya da çalıştırılan bir dağıtım komutu **yok** — ve `test_release.py`
+> içinde, bu yolda herhangi bir süreç başlatılırsa düşen bir test var.
+
+#### Taramalar CI'da çalışıyor, burada tekrar edilmiyor
+
+Kod zaten orada. İkinci kez taramak, herkesin kaynak kodunun bir kopyasını bu
+sunucuda tutmak demek olurdu — uygulamanın en baştan reddettiği şey. CI'ın
+ürettiği rapor, **elle yüklenen bir raporla aynı okuyucuya** gidiyor:
+
+```
+GitHub Actions → scanner çıktısı → mevcut parser → _ingest() → Finding → AI/Risk/SLA
+```
+
+Yeni bir paralel ayrıştırıcı yok, ikinci bir bulgu deposu yok. Dedup, "tarama
+bir kararı ezemez", risk kabulü, reopen ve `_resolve_stale`'in tarayıcı-başına
+izolasyonu olduğu gibi çalışıyor: **SAST bir SCA bulgusunu kapatamıyor.**
+
+#### CI kimlik doğrulaması
+
+Kendi başlığı var (`X-SecureTask-Token`), oturum jetonuyla aynı yoldan
+gitmiyor: bir CI jetonu oturum sanılamıyor, bir oturum da tarama sonucu
+gönderemiyor.
+
+**Jeton saklanmıyor.** Yalnızca SHA-256'sı tutuluyor ve doğrulama o özet
+üzerinden bir aramadan ibaret — karşılaştırılacak saklı bir sır yok, yedekten
+sızacak bir değer yok, ve jeton üretildikten sonra bir daha gösterilemiyor.
+Düz metnin var olduğu tek an, onu üreten cevap.
+
+Jetonun satın aldığı şey dar: kayıtlı olduğu deponun tarama sonucunu bildirmek,
+bir dağıtımın olduğunu söylemek, ve kapının ne dediğini sormak. **Bulguları
+okuyamıyor.** Okuyabilseydi, bir deponun secrets'ında duran ve o deponun
+çalıştırdığı her iş akışına verilen bir şey, bütün bir tenant'ın okuma
+kimliği olurdu.
+
+#### Depo eşlemesi
+
+İstekteki depo adına güvenilmiyor. Kayıtla eşleştiriliyor ve **tenant kayıttan
+geliyor** — bu, makine çağıranlar için çok kiracılı sınırın tamamı ve tek bir
+aramada karara bağlanıyor. Uyuşmazlık açıklanmıyor: jetonunun hangi depoya ait
+olduğunu öğrenen bir çağıran, jetonun vermediği bir şeyi öğrenmiş olur.
+
+#### Security Gate
+
+| Durum | Ne zaman |
+| --- | --- |
+| `PASSED` | Zorunlu taramaların hepsi tamamlandı, açık kritik bulgu yok |
+| `FAILED` | Hepsi tamamlandı, açık kritik bulgu var |
+| `INCOMPLETE` | Zorunlu bir tarama çalışmadı, bozuldu, ya da tarayıcısı kurulu değil |
+
+Üçüncüsü diğer ikisini anlamlı kılan cevap. Secret tarayıcı hiç çalışmamışken
+`PASSED` demek, kapısız olmaktan kötüdür: **yapılmamış bir kontrol için yeşil
+ışık.**
+
+Yalnızca kritik engelliyor — her şeye takılan bir kapı, bir hafta içinde
+kapatılan bir kapıdır. **Risk kabul edilmiş bir kritik engellemiyor**: birisi
+onu ikinci faktörle ve bir bitiş tarihiyle savundu, ve bunu ezen bir kapı o
+kararı anlamsız kılar.
+
+Engelleyici sayı `_ingest()` sırasında, o raporun sorumlu olduğu bulgular
+üzerinden sayılıyor. "Bu tenant'taki kritik bulgular" farklı bir soru: başka
+depoları, eski taramaları ve bu raporun hiç bakmadığı kodu içerir.
+
+#### Release Security Status
+
+Dağıtımın başarılı olması, artefaktın çalıştığını söyler. Kapının geçilmesi,
+kaynağın derlenmeden önce temiz göründüğünü söyler. **Hiçbiri çalışan sistemin
+kontrol edildiğini söylemez.**
+
+| Durum | Ne zaman |
+| --- | --- |
+| `READY` | Gate geçti + staging dağıtımı başarılı + DAST temiz |
+| `NOT READY` | Gate geçilemedi, ya da dağıtım başarısız, ya da DAST kritik buldu |
+| `INCOMPLETE` | Bir aşama henüz bilinmiyor — dağıtım bekleniyor, DAST çalışmadı, ya da Nuclei kurulu değil |
+
+Kesin bir başarısızlık her zaman `NOT READY`; yalnızca gerçekten bilinmeyen
+`INCOMPLETE`. Kapısı düşmüş bir pipeline'a "tamamlanmadı" demek, gerçek bir
+cevabı yumuşak bir cevabın altına gömmek olurdu.
+
+**Nuclei kurulu değilse** `DAST: unavailable` ve `Release: INCOMPLETE`. Sahte
+bir `PASSED` üretilmiyor.
+
+#### DAST'ta adres yok
+
+İstekte URL yok ve olamaz. Entegrasyon **kayıtlı bir hedef adı** taşıyor, URL
+sunucudaki `DAST_TARGETS`'tan çözülüyor, ve tarama Taramalar sayfasından
+başlatılanla aynı yoldan gidiyor. Dağıtım başarıyla tamamlanmadan da
+reddediliyor: güncellenmemiş bir staging sistemini taramak, önceki sürüm
+hakkında bir sonuç üretir ve onu bu commit'e iliştirmek bu commit hakkında
+yanlış bir ifadedir.
+
+#### Idempotency
+
+`(integration_id, external_run_id)` üzerinde bir tekillik kısıtı var — kontrolü
+biri hatırlamak zorunda kalmıyor, **veritabanı karara bağlıyor**. İş akışı
+`external_run_id` olarak `${{ github.run_id }}-${{ github.run_attempt }}`
+gönderiyor: tekrarlanan bir HTTP isteği aynı satıra düşüyor, ama düzeltmeden
+sonraki gerçek bir "re-run" yeni bir pipeline oluyor ve yeni bir karara
+varabiliyor.
+
+**Commit, bulgunun kimliğinin parçası değil.** Olsaydı her commit aynı açığı
+yeniden dosyalardı ve bir haftalık CI, kimsenin okuyamayacağı bir liste
+üretirdi.
+
+#### İş akışı
+
+`.github/workflows/securetask-devsecops.yml` — gerçek, kullanılabilir, ve
+içinde hiçbir kimlik bilgisi yok. İki GitHub Secret istiyor:
+
+```
+SECURETASK_API_URL     örn. https://securetask.example.test
+SECURETASK_CI_TOKEN    DevSecOps → "Depo bağla" ile üretilir
+```
+
+CD bölümünde kendi dağıtım adımını ekleyeceğin açık bir yer var. Oraya kendi
+action'ını, kendi komutunu, kendi kimlik bilgilerini koyuyorsun — SecureTask
+onların hiçbirini görmüyor.
 
 #### Hangi tarayıcı gerçekten var
 

@@ -5,14 +5,15 @@ from collections import defaultdict, deque
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import or_, text
+from sqlalchemy import func, or_, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 from starlette.middleware.sessions import SessionMiddleware
 
-from app import ai, audit, knowledge, scanner
+from app import ai, audit, ci, knowledge, scanner
 from app.auth import (
     callback_router,
     get_current_user,
@@ -21,13 +22,18 @@ from app.auth import (
     require_step_up,
     router as auth_router,
 )
-from app.config import AI_HOURLY_LIMIT, SESSION_HTTPS_ONLY, SESSION_SECRET
+from app.config import AI_HOURLY_LIMIT, SCAN_MAX_OUTPUT, SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
 from app.importers import parse_gitleaks, parse_nuclei, parse_pip_audit, parse_sarif
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
 from app.source import SourceUnavailable, window_for
 from app.models import (
     ACCEPTED_RISK,
+    DEPLOY_SUCCEEDED,
+    RELEASE_READY,
+    REQUIRED_SCANS,
+    CiIntegration,
+    PipelineRun,
     MAX_ACCEPTANCE_DAYS,
     MIN_ACCEPTANCE_REASON,
     SEVERITY_ORDER,
@@ -35,6 +41,7 @@ from app.models import (
     TEAM_RISK_OWNER,
     AWAITING_RETEST,
     CLOSED_STATUSES,
+    GATE_BLOCKS_AT,
     DEFAULT_SCOPE,
     SCOPE_DONE,
     AIAnalysis,
@@ -57,6 +64,14 @@ from app.schemas import (
     AssetResponse,
     AssigneeUpdate,
     AuditLogResponse,
+    CiDastRequest,
+    CiDeployment,
+    CiIntegrationCreate,
+    CiIntegrationCreated,
+    CiIntegrationResponse,
+    CiScanResult,
+    GateResponse,
+    PipelineResponse,
     FindingCreate,
     FindingResponse,
     FindingUpdate,
@@ -853,6 +868,14 @@ def _ingest(
       scanner repeating itself.
     """
     created = reopened = escalated = unchanged = kept_accepted = 0
+    # Findings this report is responsible for that are critical and still open.
+    # Counted here rather than queried later because "critical findings in this
+    # tenant" is a different set: it includes other repositories, older scans
+    # and code this report never looked at. A security gate has to judge what
+    # *this* report found. Accepted risks are excluded — that decision was made
+    # by a person with a second factor, and a gate that overrules it is a gate
+    # people switch off.
+    blocking: set[int] = set()
 
     for result in results:
         existing = (
@@ -885,6 +908,9 @@ def _ingest(
             )
             db.add(finding)
             db.flush()  # need the id for the audit entry
+
+            if finding.severity == GATE_BLOCKS_AT:
+                blocking.add(finding.id)
             _record_audit(
                 db,
                 user,
@@ -932,6 +958,11 @@ def _ingest(
             else:
                 unchanged += 1
 
+            # Read after the branches above, so an escalation into critical and
+            # a reopen both count. An accepted risk never reaches here.
+            if existing.severity == GATE_BLOCKS_AT and existing.status not in CLOSED_STATUSES:
+                blocking.add(existing.id)
+
     summary = (
         f"{tool}: {created} yeni · {reopened} yeniden açıldı · {escalated} yükseltildi "
         f"· {unchanged} değişmedi · {kept_accepted} risk kabul (korundu) "
@@ -943,6 +974,7 @@ def _ingest(
 
     return {
         "tool": tool,
+        "blocking": len(blocking),
         "created": created,
         "reopened": reopened,
         "escalated": escalated,
@@ -2116,6 +2148,7 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
         row.created = counts.get("created", 0)
         row.reopened = counts.get("reopened", 0)
         row.unchanged = counts.get("unchanged", 0)
+        row.blocking = counts.get("blocking", 0)
         row.resolved = resolved
         row.total = len(results)
         row.finished_at = datetime.now(timezone.utc)
@@ -2130,6 +2163,35 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
             row.finished_at = datetime.now(timezone.utc)
             db.commit()
     finally:
+        # A run that belongs to a pipeline has just changed that pipeline's
+        # answer — this is the only path by which a DAST scan finishes, and
+        # without it the release status would stay at whatever it was when the
+        # scan was queued.
+        try:
+            row = db.query(ScanRun).filter(ScanRun.id == scan_id).one_or_none()
+
+            if row is not None and row.pipeline_id:
+                pipeline = (
+                    db.query(PipelineRun)
+                    .filter(PipelineRun.id == row.pipeline_id)
+                    .one_or_none()
+                )
+
+                if pipeline is not None:
+                    if row.kind == scanner.DAST:
+                        audit.append(
+                            db, user_id=pipeline.owner_id, action="dast_completed",
+                            detail=_sanitize_log(
+                                f"{pipeline.repository} · run {pipeline.external_run_id} "
+                                f"· {row.status} · {row.total} sonuç"
+                            ),
+                        )
+                        db.commit()
+
+                    _refresh_gate(db, pipeline)
+        except Exception:  # noqa: BLE001 - never let bookkeeping kill the thread
+            db.rollback()
+
         db.close()
 
 
@@ -2392,3 +2454,679 @@ def admin_audit_log(
         .limit(100)
         .all()
     )
+
+
+# --- DevSecOps: the pipeline's side ------------------------------------------
+#
+# The scanners already exist, the importer already exists, and the finding
+# lifecycle already exists. What is added here is the part that was missing:
+# somewhere for the *pipeline* to report to, and a decision that follows from
+# all of its scans together rather than from any one of them.
+#
+# Two doors, and they are not the same door. `/ci/*` is for a machine holding
+# a repository token; it may report and it may ask what the gate concluded.
+# Everything else — reading findings, changing a status, accepting a risk —
+# still needs a person with a session, because a token in a repository's
+# secrets is a credential that leaves the building.
+#
+# **Nothing here deploys.** A deployment event is a report that something
+# already happened somewhere else. There is no host, no key and no command in
+# any of these handlers.
+
+
+def _ci_integration(
+    x_securetask_token: str | None = Header(default=None),
+    db: Session = Depends(get_db),
+) -> CiIntegration:
+    """Resolve a CI token to the one repository it may act for.
+
+    Its own header rather than `Authorization`, so the two credential kinds
+    never travel the same path: a CI token can never be mistaken for a session,
+    and a session can never be used to post scan results.
+
+    Verification is a lookup by hash. Nothing stored is a secret, there is no
+    comparison against a plaintext value, and a token cannot be read back out.
+    """
+    token = (x_securetask_token or "").strip()
+
+    if not ci.looks_like_token(token):
+        # Deliberately the same message for "no token" and "malformed token".
+        # Telling a caller which one it was is telling them how close they are.
+        raise HTTPException(status_code=401, detail="Geçersiz CI jetonu.")
+
+    row = (
+        db.query(CiIntegration)
+        .filter(CiIntegration.token_hash == ci.hash_token(token))
+        .one_or_none()
+    )
+
+    if row is None or not row.is_active:
+        raise HTTPException(status_code=401, detail="Geçersiz CI jetonu.")
+
+    row.last_used_at = datetime.now(timezone.utc)
+    db.commit()
+
+    return row
+
+
+def _pipeline_owner(db: Session, integration: CiIntegration) -> User:
+    """Whose list a pipeline's findings land in.
+
+    From the registration, never from the request — this is the whole of the
+    tenant boundary for machine callers, and it is decided in one lookup.
+    """
+    user = db.query(User).filter(User.id == integration.owner_id).one_or_none()
+
+    if user is None:
+        raise HTTPException(
+            status_code=409,
+            detail="Bu entegrasyonun sahibi bulunamadı; entegrasyon yeniden kurulmalı.",
+        )
+
+    return user
+
+
+def _pipeline_for(db: Session, integration: CiIntegration, ctx) -> PipelineRun:
+    """Find or create the run this report belongs to.
+
+    Idempotent, and the database is what enforces it: `(integration_id,
+    external_run_id)` is unique, so a retried request lands on the row it
+    already made. A CI provider retries — on a timeout, on a network blip, on
+    a manual "re-run this job" — and a second pipeline for one run would give
+    the same commit two different answers.
+    """
+    if not ci.same_repository(ctx.repository, integration.repository):
+        # The repository in the request is not trusted, and a mismatch is not
+        # explained: a caller that learns which repository its token belongs to
+        # has learned something the token did not grant.
+        raise HTTPException(status_code=403, detail="Bu jeton bu depo için geçerli değil.")
+
+    run_id = (ctx.external_run_id or "").strip()[:120]
+
+    if not run_id:
+        raise HTTPException(status_code=422, detail="external_run_id gerekli.")
+
+    existing = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.integration_id == integration.id,
+            PipelineRun.external_run_id == run_id,
+        )
+        .one_or_none()
+    )
+
+    if existing is not None:
+        return existing
+
+    owner = _pipeline_owner(db, integration)
+    row = PipelineRun(
+        integration_id=integration.id,
+        # Echoed from the registration, not from the request.
+        repository=integration.repository,
+        provider=integration.provider,
+        branch=(ctx.branch or "")[:200],
+        commit_sha=(ctx.commit_sha or "")[:64],
+        pull_request=ctx.pull_request,
+        external_run_id=run_id,
+        external_url=(ctx.external_url or "")[:500],
+        status="running",
+        owner_id=owner.id,
+        team_id=integration.team_id,
+    )
+    db.add(row)
+
+    try:
+        db.commit()
+    except IntegrityError:
+        # Two of the pipeline's jobs posted at once and both missed the read
+        # above. The constraint settled it; read back the row that won.
+        db.rollback()
+        return (
+            db.query(PipelineRun)
+            .filter(
+                PipelineRun.integration_id == integration.id,
+                PipelineRun.external_run_id == run_id,
+            )
+            .one()
+        )
+
+    db.refresh(row)
+    audit.append(
+        db, user_id=row.owner_id, action="pipeline_started",
+        detail=_sanitize_log(
+            f"{row.repository} · {row.branch or '?'} · {row.commit_sha[:8] or '?'} "
+            f"· run {row.external_run_id}"
+        ),
+    )
+    db.commit()
+
+    return row
+
+
+def _pipeline_scans(db: Session, pipeline: PipelineRun) -> list[ScanRun]:
+    return (
+        db.query(ScanRun)
+        .filter(ScanRun.pipeline_id == pipeline.id)
+        .order_by(ScanRun.id.asc())
+        .all()
+    )
+
+
+def _refresh_gate(db: Session, pipeline: PipelineRun) -> None:
+    """Recompute both decisions and record any change in the audit log.
+
+    Called after anything that could move them. Recomputed rather than
+    incremented: a gate derived from the runs that exist right now cannot drift
+    out of step with them, and there is no order of arrival that produces a
+    different answer.
+    """
+    scans = _pipeline_scans(db, pipeline)
+    was_gate, was_release = pipeline.security_gate, pipeline.release_status
+
+    pipeline.security_gate, pipeline.gate_reason = ci.gate_for(
+        [s for s in scans if s.kind in REQUIRED_SCANS]
+    )
+    dast = next((s for s in reversed(scans) if s.kind == scanner.DAST), None)
+    pipeline.dast_status = dast.status if dast is not None else ""
+    pipeline.release_status, pipeline.release_reason = ci.release_for(pipeline, dast)
+    db.commit()
+
+    if pipeline.security_gate != was_gate:
+        audit.append(
+            db, user_id=pipeline.owner_id,
+            action=f"gate_{pipeline.security_gate}"[:20],
+            detail=_sanitize_log(
+                f"{pipeline.repository} · run {pipeline.external_run_id} "
+                f"· {pipeline.gate_reason}"
+            ),
+        )
+        db.commit()
+
+    if pipeline.release_status != was_release:
+        audit.append(
+            db, user_id=pipeline.owner_id,
+            action=("release_ready" if pipeline.release_status == RELEASE_READY
+                    else "release_blocked"),
+            detail=_sanitize_log(
+                f"{pipeline.repository} · run {pipeline.external_run_id} "
+                f"· {pipeline.release_status} · {pipeline.release_reason}"
+            ),
+        )
+        db.commit()
+
+
+def _gate_view(db: Session, pipeline: PipelineRun) -> dict:
+    scans = _pipeline_scans(db, pipeline)
+    done = {s.kind for s in scans if s.status == "completed"}
+
+    return {
+        "security_gate": pipeline.security_gate,
+        "gate_reason": pipeline.gate_reason,
+        "release_status": pipeline.release_status,
+        "release_reason": pipeline.release_reason,
+        "blocking": sum(s.blocking or 0 for s in scans if s.kind in REQUIRED_SCANS),
+        "completed_scans": sorted(done),
+        "missing_scans": [k for k in REQUIRED_SCANS if k not in done],
+    }
+
+
+@app.post("/ci/results", response_model=GateResponse)
+def ci_results(
+    body: CiScanResult,
+    integration: CiIntegration = Depends(_ci_integration),
+    db: Session = Depends(get_db),
+):
+    """Take one scanner's report from a pipeline and fold it into the findings.
+
+    The report goes through the reader that already exists for its format and
+    the importer that already exists for its results, so there is no second
+    path by which a finding can come into being — same deduplication, same
+    "a scan may not overwrite a judgement", same audit line.
+
+    The scan was already run, in CI, where the code is. Running it a second
+    time here would mean this application holding a copy of everyone's source,
+    which is the thing it has refused since the beginning.
+    """
+    pipeline = _pipeline_for(db, integration, body)
+    user = _pipeline_owner(db, integration)
+    kind = body.scan_type
+    tool = ci.SCANNER_FOR[kind]
+
+    # Idempotency, second half: the pipeline row is unique per run, and one
+    # scan of each kind belongs to one pipeline. A retried POST finds the run
+    # it already made and returns the same answer rather than importing twice.
+    existing = (
+        db.query(ScanRun)
+        .filter(ScanRun.pipeline_id == pipeline.id, ScanRun.kind == kind)
+        .one_or_none()
+    )
+
+    if existing is not None:
+        return _gate_view(db, pipeline)
+
+    row = ScanRun(
+        project=integration.project or integration.repository,
+        kind=kind,
+        scanner=tool,
+        status="running",
+        pipeline_id=pipeline.id,
+        owner_id=user.id,
+        team_id=integration.team_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    if not body.succeeded:
+        # The scanner could not run. Recorded as that, not as a clean result:
+        # an empty report from a scanner that never started reads exactly like
+        # a repository with nothing wrong in it.
+        row.status = "scanner_unavailable" if not body.error else "failed"
+        row.error = (body.error or f"{tool} CI'da çalıştırılamadı.")[:400]
+        row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        _refresh_gate(db, pipeline)
+        return _gate_view(db, pipeline)
+
+    raw = body.payload or ""
+
+    if len(raw) > SCAN_MAX_OUTPUT:
+        row.status = "failed"
+        row.error = "Tarama çıktısı beklenenden büyük; içe aktarılmadı."
+        row.finished_at = datetime.now(timezone.utc)
+        db.commit()
+        _refresh_gate(db, pipeline)
+        return _gate_view(db, pipeline)
+
+    covered = None
+
+    if kind == "sca":
+        results, skipped, covered = parse_pip_audit(raw)
+    elif kind == "secret":
+        # The second line of defence, and it is a refusal rather than a filter.
+        #
+        # Gitleaks can emit SARIF, and its SARIF carries the matched secret in
+        # `snippet` — which the SARIF reader would copy straight into evidence.
+        # So the format is not accepted here at all: a secret report is the
+        # JSON array this application knows how to strip, or it is rejected.
+        # The workflow also passes `--redact`, but a workflow is a file someone
+        # can edit and this is the side that must not depend on it.
+        if '"runs"' in raw[:2000] or '"$schema"' in raw[:2000]:
+            row.status = "failed"
+            row.error = (
+                "Secret raporu SARIF olarak gönderilmiş. SARIF, eşleşen satırı "
+                "ham hâliyle taşıdığı için kabul edilmiyor — JSON gönder."
+            )
+            row.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            _refresh_gate(db, pipeline)
+            return _gate_view(db, pipeline)
+
+        results, skipped = parse_gitleaks(raw)
+    else:
+        results, skipped, reported = parse_sarif(raw)
+        # The tool name in the report is read but not used: `tool` comes from
+        # the scan type. A report that could name its own scanner could file
+        # findings as bandit and have them close a real bandit scan's findings.
+        del reported
+
+    counts = _ingest(db, user, integration.team_id, results, tool, skipped)
+    resolved = _resolve_stale(db, user, tool, results, covered=covered)
+
+    row.status = "completed"
+    row.created = counts.get("created", 0)
+    row.reopened = counts.get("reopened", 0)
+    row.unchanged = counts.get("unchanged", 0)
+    row.blocking = counts.get("blocking", 0)
+    row.resolved = resolved
+    row.total = len(results)
+    row.finished_at = datetime.now(timezone.utc)
+    db.commit()
+
+    audit.append(
+        db, user_id=user.id, action="ci_completed",
+        detail=_sanitize_log(
+            f"{pipeline.repository} · run {pipeline.external_run_id} · {kind.upper()} "
+            f"· {row.total} sonuç · {row.blocking} engelleyici"
+        ),
+    )
+    db.commit()
+    _refresh_gate(db, pipeline)
+
+    return _gate_view(db, pipeline)
+
+
+@app.get("/ci/gate", response_model=GateResponse)
+def ci_gate(
+    repository: str,
+    external_run_id: str,
+    integration: CiIntegration = Depends(_ci_integration),
+    db: Session = Depends(get_db),
+):
+    """What the gate concluded, for the pipeline to read and act on.
+
+    Deliberately small. A pipeline may learn whether it passed and why; it may
+    not read the findings. A token that could would be a read credential for a
+    whole tenant, sitting in a repository's secrets, held by every workflow
+    that repository ever runs.
+    """
+    if not ci.same_repository(repository, integration.repository):
+        raise HTTPException(status_code=403, detail="Bu jeton bu depo için geçerli değil.")
+
+    pipeline = (
+        db.query(PipelineRun)
+        .filter(
+            PipelineRun.integration_id == integration.id,
+            PipelineRun.external_run_id == external_run_id.strip(),
+        )
+        .one_or_none()
+    )
+
+    if pipeline is None:
+        raise HTTPException(status_code=404, detail="Böyle bir pipeline kaydı yok.")
+
+    return _gate_view(db, pipeline)
+
+
+@app.post("/ci/deployments", response_model=GateResponse)
+def ci_deployment(
+    body: CiDeployment,
+    integration: CiIntegration = Depends(_ci_integration),
+    db: Session = Depends(get_db),
+):
+    """Record that an external system deployed something.
+
+    A report, not an instruction. Nothing in the request could be deployed
+    *from* — there is no host, no credential, no artefact and no command —
+    because this application does not deploy. It keeps the security record of
+    what somebody else did, which is a different job and a much smaller
+    blast radius.
+    """
+    pipeline = _pipeline_for(db, integration, body)
+
+    pipeline.environment = body.environment
+    pipeline.deployment_status = body.state
+    pipeline.deployment_ref = (body.deployment_ref or "")[:120]
+
+    if body.state == DEPLOY_SUCCEEDED:
+        pipeline.deployed_at = datetime.now(timezone.utc)
+
+    db.commit()
+
+    audit.append(
+        db, user_id=pipeline.owner_id, action=f"deploy_{body.state}"[:20],
+        detail=_sanitize_log(
+            f"{pipeline.repository} · {body.environment} "
+            f"· {pipeline.commit_sha[:8] or '?'} · run {pipeline.external_run_id}"
+        ),
+    )
+    db.commit()
+    _refresh_gate(db, pipeline)
+
+    return _gate_view(db, pipeline)
+
+
+@app.post("/ci/dast", response_model=GateResponse)
+def ci_dast(
+    body: CiDastRequest,
+    integration: CiIntegration = Depends(_ci_integration),
+    db: Session = Depends(get_db),
+):
+    """Scan the environment that was just deployed.
+
+    The address is not in this request and cannot be. The integration names a
+    **registered target**, the target resolves to a URL from `DAST_TARGETS` on
+    the server, and the scan goes through the same path as one started from the
+    Scans page — so a pipeline cannot point this application's scanner at
+    anything the operator has not already written down.
+
+    Refused unless the deployment actually succeeded: scanning a staging system
+    that was not updated produces a result about the previous release, and
+    attaching it to this commit would be a false statement about this commit.
+    """
+    pipeline = _pipeline_for(db, integration, body)
+
+    if pipeline.deployment_status != DEPLOY_SUCCEEDED:
+        raise HTTPException(
+            status_code=409,
+            detail="Dağıtım başarıyla tamamlanmadan DAST çalıştırılmaz.",
+        )
+
+    target = (integration.dast_target or "").strip()
+
+    if not target:
+        raise HTTPException(
+            status_code=409,
+            detail="Bu entegrasyon için kayıtlı bir DAST hedefi tanımlı değil.",
+        )
+
+    if target not in scanner.DAST_TARGETS:
+        raise HTTPException(
+            status_code=409,
+            detail="Entegrasyondaki DAST hedefi sunucuda tanımlı değil.",
+        )
+
+    existing = (
+        db.query(ScanRun)
+        .filter(ScanRun.pipeline_id == pipeline.id, ScanRun.kind == scanner.DAST)
+        .one_or_none()
+    )
+
+    if existing is not None:
+        return _gate_view(db, pipeline)
+
+    user = _pipeline_owner(db, integration)
+    row = ScanRun(
+        project=target, kind=scanner.DAST, scanner="nuclei", status="queued",
+        pipeline_id=pipeline.id, owner_id=user.id, team_id=integration.team_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    threading.Thread(
+        target=_run_scan,
+        args=(row.id, user.id, integration.team_id, target, "nuclei"),
+        daemon=True,
+    ).start()
+
+    _refresh_gate(db, pipeline)
+
+    return _gate_view(db, pipeline)
+
+
+# --- DevSecOps: the human side -----------------------------------------------
+
+
+def _pipeline_view(db: Session, row: PipelineRun) -> dict:
+    scans = _pipeline_scans(db, row)
+
+    return {
+        "id": row.id,
+        "repository": row.repository,
+        "provider": row.provider,
+        "branch": row.branch,
+        "commit_sha": row.commit_sha,
+        "pull_request": row.pull_request,
+        "external_run_id": row.external_run_id,
+        "external_url": row.external_url,
+        "status": row.status,
+        "started_at": row.started_at,
+        "completed_at": row.completed_at,
+        "security_gate": row.security_gate,
+        "gate_reason": row.gate_reason,
+        "environment": row.environment,
+        "deployment_status": row.deployment_status,
+        "deployed_at": row.deployed_at,
+        "dast_status": row.dast_status,
+        "release_status": row.release_status,
+        "release_reason": row.release_reason,
+        "scans": [
+            {
+                "id": s.id, "kind": s.kind, "scanner": s.scanner, "status": s.status,
+                "created": s.created, "reopened": s.reopened, "unchanged": s.unchanged,
+                "resolved": s.resolved, "total": s.total, "blocking": s.blocking or 0,
+                "note": s.note or "", "error": s.error or "",
+                "started_at": s.started_at, "finished_at": s.finished_at,
+            }
+            for s in scans
+        ],
+    }
+
+
+def _visible_pipeline(db: Session, user: User, pipeline_id: int) -> PipelineRun:
+    """The caller's own, or their team's. Anything else is 404.
+
+    Not 403: confirming that a pipeline exists tells someone which
+    repositories this installation watches, which is not theirs to learn.
+    """
+    row = db.query(PipelineRun).filter(PipelineRun.id == pipeline_id).one_or_none()
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Pipeline bulunamadı.")
+
+    if row.owner_id == user.id:
+        return row
+
+    if row.team_id and row.team_id in _my_team_ids(db, user):
+        return row
+
+    raise HTTPException(status_code=404, detail="Pipeline bulunamadı.")
+
+
+@app.get("/pipelines", response_model=list[PipelineResponse])
+def list_pipelines(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Recent pipeline runs this caller may see, newest first."""
+    teams = _my_team_ids(db, user)
+    query = db.query(PipelineRun).filter(
+        or_(
+            PipelineRun.owner_id == user.id,
+            PipelineRun.team_id.in_(teams) if teams else False,
+        )
+    )
+    rows = query.order_by(PipelineRun.id.desc()).limit(20).all()
+
+    return [_pipeline_view(db, row) for row in rows]
+
+
+@app.get("/pipelines/{pipeline_id}", response_model=PipelineResponse)
+def get_pipeline(
+    pipeline_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return _pipeline_view(db, _visible_pipeline(db, user, pipeline_id))
+
+
+@app.get("/ci/integrations", response_model=list[CiIntegrationResponse])
+def list_integrations(
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """The caller's registered repositories. No tokens, not even redacted."""
+    return (
+        db.query(CiIntegration)
+        .filter(CiIntegration.owner_id == user.id)
+        .order_by(CiIntegration.id.desc())
+        .all()
+    )
+
+
+@app.post("/ci/integrations", response_model=CiIntegrationCreated, status_code=201)
+def create_integration(
+    body: CiIntegrationCreate,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Register a repository and issue its token.
+
+    This is the only response in the application that carries a credential, and
+    it carries it once. What is stored is a SHA-256, so the value cannot be
+    read back — not by an administrator, not from a backup, not from this
+    endpoint on a second call. Losing it means issuing a new one, which is the
+    correct trade for never being able to leak the old one.
+    """
+    if body.team_id is not None:
+        _require_membership(db, user, body.team_id)
+
+    repository = (body.repository or "").strip()
+
+    # "owner/name" and nothing else. A value with a scheme or a path is
+    # somebody trying to make this field mean a URL.
+    if repository.count("/") != 1 or not all(part.strip() for part in repository.split("/")):
+        raise HTTPException(
+            status_code=422, detail="Depo adı 'sahip/ad' biçiminde olmalı.",
+        )
+
+    target = (body.dast_target or "").strip()
+
+    if target and target not in scanner.DAST_TARGETS:
+        # A name from the server's own registry, or nothing. This is where a
+        # URL would otherwise get in, one field removed from the scanner.
+        raise HTTPException(
+            status_code=422,
+            detail="Böyle bir DAST hedefi tanımlı değil; hedefler sunucuda kayıtlıdır.",
+        )
+
+    if db.query(CiIntegration).filter(
+        func.lower(CiIntegration.repository) == repository.lower()
+    ).first():
+        raise HTTPException(status_code=409, detail="Bu depo zaten kayıtlı.")
+
+    token, token_hash = ci.issue_token()
+    row = CiIntegration(
+        repository=repository,
+        project=(body.project or repository.split("/")[-1])[:80],
+        label=(body.label or "")[:80],
+        token_hash=token_hash,
+        dast_target=target,
+        owner_id=user.id,
+        team_id=body.team_id,
+    )
+    db.add(row)
+    db.commit()
+    db.refresh(row)
+
+    # The token is not in the detail, and there is no field it could reach.
+    audit.append(
+        db, user_id=user.id, action="ci_registered",
+        detail=_sanitize_log(f"{row.repository} · proje {row.project}"),
+    )
+    db.commit()
+
+    return {
+        **CiIntegrationResponse.model_validate(row).model_dump(),
+        "token": token,
+    }
+
+
+@app.delete("/ci/integrations/{integration_id}")
+def delete_integration(
+    integration_id: int,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Revoke a repository's access. The pipelines it filed stay."""
+    row = (
+        db.query(CiIntegration)
+        .filter(CiIntegration.id == integration_id, CiIntegration.owner_id == user.id)
+        .one_or_none()
+    )
+
+    if row is None:
+        raise HTTPException(status_code=404, detail="Entegrasyon bulunamadı.")
+
+    repository = row.repository
+    db.delete(row)
+    db.commit()
+
+    audit.append(
+        db, user_id=user.id, action="ci_revoked",
+        detail=_sanitize_log(repository),
+    )
+    db.commit()
+
+    return {"message": "Integration revoked"}

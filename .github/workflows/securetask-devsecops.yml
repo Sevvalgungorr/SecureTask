@@ -1,0 +1,233 @@
+# DevSecOps pipeline: SecureTask'a rapor eden CI/CD.
+#
+# Taramalar **burada** çalışıyor, kodun zaten bulunduğu yerde. SecureTask onları
+# ikinci kez çalıştırmıyor — bu, herkesin kaynak kodunun bir kopyasını orada
+# tutmak demek olurdu, ve o uygulamanın başından beri reddettiği şey.
+#
+# Bu dosyada gerçek bir jeton, gerçek bir staging adresi veya herhangi bir
+# kimlik bilgisi YOK. İkisi de GitHub Secrets'tan geliyor:
+#
+#   SECURETASK_API_URL    örn. https://securetask.example.test
+#   SECURETASK_CI_TOKEN   SecureTask → DevSecOps → "Depo bağla" ile üretilir
+#
+# Jeton yalnızca bu deponun tarama sonuçlarını bildirebiliyor. Bulguları
+# okuyamıyor, bir durumu değiştiremiyor, riski kabul edemiyor ve başka bir
+# depoya dokunamıyor.
+
+name: DevSecOps
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Varsayılan izinleri daraltıyoruz. Bu iş akışının depoyu okumaktan başka bir
+# şeye ihtiyacı yok, ve bir iş akışına gereğinden fazla izin vermek, o iş
+# akışına giren her adımın o izne sahip olması demek.
+permissions:
+  contents: read
+
+env:
+  SECURETASK_API_URL: ${{ secrets.SECURETASK_API_URL }}
+  # run_id tek başına yetmiyor: "re-run failed jobs" aynı run_id ile geliyor,
+  # ve düzeltmeden sonra tekrar çalıştırmak yeni bir karara varabilmeli.
+  # run_attempt ile birlikte, tekrarlanan bir HTTP isteği idempotent kalırken
+  # gerçek bir yeniden çalıştırma yeni bir pipeline oluyor.
+  RUN_ID: ${{ github.run_id }}-${{ github.run_attempt }}
+
+jobs:
+  security:
+    name: CI · tests and security scans
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt -r requirements-dev.txt
+
+      # --- Tests ---------------------------------------------------------
+      #
+      # Önce testler. Kırık bir derlemenin güvenlik taraması, düzeltilmesi
+      # gereken şey hakkında bir cevap değil.
+      - name: Tests
+        run: pytest -q
+
+      # --- SAST ----------------------------------------------------------
+      - name: SAST · Bandit
+        id: sast
+        continue-on-error: true
+        run: |
+          bandit -r . -f sarif -o bandit.sarif \
+            --exclude ./.venv,./venv,./node_modules,./build,./dist \
+            --skip B101 -q || true
+          test -s bandit.sarif
+
+      - name: Report SAST
+        if: always()
+        run: |
+          python .github/scripts/securetask_report.py \
+            --scan-type sast \
+            --report bandit.sarif \
+            --succeeded "${{ steps.sast.outcome == 'success' }}"
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      # --- SCA -----------------------------------------------------------
+      #
+      # --no-deps ve --disable-pip: bağımlılık grafiği çözülmüyor, dolayısıyla
+      # hiçbir paket indirilmiyor ve hiçbir setup.py çalışmıyor. Denetlediği
+      # kodu çalıştıran bir denetim, denetim değildir.
+      # --no-deps tek bir sabitlenmemiş satır gördüğünde TÜM dosyayı
+      # reddediyor, ve gerçek bir projede en az bir `>=` var. Sabitlenmiş
+      # satırlar denetleniyor, kalanı atlanıyor — ve kaç tanesinin atlandığı
+      # yazılıyor. Sessizce düşürmek, "açık bulunamadı"yı operatörün
+      # sandığından kısa bir listeye karşı okutmak olurdu.
+      - name: SCA · pinned manifest
+        run: |
+          python .github/scripts/pinned_manifest.py
+
+      - name: SCA · pip-audit
+        id: sca
+        continue-on-error: true
+        run: |
+          pip-audit -r pinned.txt --no-deps --disable-pip \
+            -f json -o pip-audit.json --progress-spinner off || true
+          test -s pip-audit.json
+
+      - name: Report SCA
+        if: always()
+        run: |
+          python .github/scripts/securetask_report.py \
+            --scan-type sca \
+            --report pip-audit.json \
+            --succeeded "${{ steps.sca.outcome == 'success' }}"
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      # --- Secret scanning -----------------------------------------------
+      #
+      # --redact bu dosyadaki en önemli bayrak. Onsuz gitleaks bulduğu kimlik
+      # bilgisini raporuna yazıyor, ve o rapor bir iş akışı günlüğünden,
+      # bir artefakttan ve bir HTTP isteğinden geçiyor. Onunla, değer
+      # gitleaks'in kendi içinde siliniyor.
+      #
+      # JSON, SARIF değil: gitleaks'in SARIF'i eşleşen satırı `snippet`
+      # alanında taşıyor. SecureTask zaten SARIF gövdesini secret taraması
+      # olarak kabul etmiyor — ama iki taraf da doğru olsun.
+      - name: Secret Scan · Gitleaks
+        id: secret
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+          GITLEAKS_ENABLE_SUMMARY: "false"
+
+      - name: Normalise gitleaks output
+        if: always()
+        continue-on-error: true
+        run: |
+          # Eylem raporu results.sarif olarak da bırakabiliyor; SecureTask'a
+          # yalnızca JSON gidiyor. Yoksa boş bir dizi değil, "çalışmadı"
+          # bildirilecek — boş bir rapor, temiz bir depo gibi okunur.
+          test -f results.json || echo "" > results.json
+
+      - name: Report Secret Scan
+        if: always()
+        run: |
+          python .github/scripts/securetask_report.py \
+            --scan-type secret \
+            --report results.json \
+            --succeeded "${{ steps.secret.outcome == 'success' }}"
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      # --- Security Gate -------------------------------------------------
+      #
+      # Kararı SecureTask veriyor, bu iş akışı yalnızca okuyup uyguluyor.
+      # Politikayı burada tutmak, her deponun kendi eşiğini yazması demek
+      # olurdu — ve hiçbir yerde bakılabilir tek bir kural kalmazdı.
+      - name: Security Gate
+        run: |
+          python .github/scripts/securetask_report.py --gate
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+  # --- CD ----------------------------------------------------------------
+  #
+  # SecureTask dağıtım yapmıyor ve dağıtım için bir kimlik bilgisi tutmuyor.
+  # Dağıtımı bu iş yapıyor; SecureTask yalnızca ne olduğunu kaydediyor.
+  deploy:
+    name: CD · staging
+    needs: security
+    # Yalnızca main'de ve yalnızca güvenlik işi geçtiyse. Bir pull request
+    # staging'e çıkmıyor.
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Deployment started
+        run: |
+          python .github/scripts/securetask_report.py --deployment started
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # BURAYA KENDİ DAĞITIM ADIMINI EKLE
+      # ------------------------------------------------------------------
+      #
+      # Kendi action'ın, kendi komutun, kendi kimlik bilgilerin — hepsi bu
+      # deponun ve bu iş akışının işi. SecureTask'a SSH anahtarı, kubeconfig
+      # ya da bulut kimlik bilgisi VERME: onları tutan bir uygulama, birinin
+      # altyapısına ulaşmak için saldırmaya değer bir uygulamadır.
+      #
+      # Örnek:
+      #   - name: Deploy to staging
+      #     run: ./deploy.sh staging
+      #     env:
+      #       DEPLOY_KEY: ${{ secrets.DEPLOY_KEY }}
+      #
+      - name: Deploy to staging (integration point)
+        id: deploy
+        run: |
+          echo "Bu adım kasıtlı olarak boş. Kendi dağıtım adımını buraya ekle."
+
+      - name: Deployment result
+        if: always()
+        run: |
+          python .github/scripts/securetask_report.py \
+            --deployment "${{ steps.deploy.outcome == 'success' && 'succeeded' || 'failed' }}"
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      # --- Dağıtım sonrası DAST ------------------------------------------
+      #
+      # Bu istekte adres YOK ve olamaz. SecureTask hedefi entegrasyonun
+      # kaydından, URL'yi de kendi DAST_TARGETS yapılandırmasından çözüyor.
+      # Nuclei kurulu değilse sonuç "unavailable" oluyor ve Release Security
+      # "incomplete" kalıyor — sahte bir PASSED üretilmiyor.
+      - name: DAST · Nuclei (SecureTask tarafında)
+        if: steps.deploy.outcome == 'success'
+        run: |
+          python .github/scripts/securetask_report.py --dast
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
+
+      - name: Release security status
+        if: always()
+        run: |
+          python .github/scripts/securetask_report.py --release
+        env:
+          SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}
