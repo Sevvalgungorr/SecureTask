@@ -6,3 +6,10 @@ pytest>=8.0
 # our own source for the patterns that usually precede a vulnerability.
 pip-audit>=2.7
 bandit>=1.7
+
+# Gitleaks is a single Go binary and has no Python package, so it cannot be
+# listed here: https://github.com/gitleaks/gitleaks
+#
+# Without it the Secret Scan tab still works — it reports the scan as
+# `scanner_unavailable` and says the tool is missing, rather than showing an
+# empty result that reads like a clean one.

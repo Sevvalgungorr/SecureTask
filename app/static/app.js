@@ -280,6 +280,16 @@ function closeCodeViewer() {
   document.getElementById("codeVeil").classList.add("hidden");
 }
 
+// Secret tarayıcısından gelen bulgu. İki cevap da yeter: hangi araç filed
+// ettiyse o (güvenilir olan), ve bulgunun kendi kaydı (aracın adı sonradan
+// değişse bile duruyor).
+const SECRET_SCANNERS = new Set(["gitleaks"]);
+
+function isSecretFinding(f) {
+  if (SECRET_SCANNERS.has((f.source || "").toLowerCase())) return true;
+  return !!(f.details && f.details.kind === "secret");
+}
+
 async function openCodeViewer(f) {
   const lines = f.evidence.replace(/\n$/, "").split("\n");
   const start = f.evidence_start || f.evidence_line || 1;
@@ -318,7 +328,11 @@ async function openCodeViewer(f) {
   document.getElementById("codeVeil").classList.remove("hidden");
   document.getElementById("codeClose").focus();
 
-  if (!inBlock && flagged) {
+  // Secret bulgusunda dosyaya hiç gidilmiyor. Elimizdeki satır maskeli,
+  // dosyadaki satır değil — ve onu istemek, bu özelliğin uzak tutmak için var
+  // olduğu değeri geri getirmek olurdu. Sunucu da zaten reddediyor; burada
+  // istememek, reddedilen bir isteği hiç göndermemek demek.
+  if (!inBlock && flagged && !isSecretFinding(f)) {
     try {
       const src = await api(`/findings/${f.id}/source`);
       block = { lines: src.lines, start: src.start_line, line: src.line, fromDisk: true };
@@ -377,7 +391,20 @@ function renderCodeBlock(host, f, block) {
     }
   });
 
-  if (block.fromDisk) {
+  if (isSecretFinding(f)) {
+    // Gösterilen satırın neden böyle göründüğünü söylüyor. Yıldızları
+    // açıklamadan göstermek, "değer neredeydi" sorusunu doğurur — ve cevabı
+    // aramaya iter.
+    const note = document.createElement("p");
+    note.className = "code-note";
+    note.textContent =
+      "Bu satır maskelenmiş olarak gösteriliyor. Değerin kendisi SecureTask'a "
+      + "hiç ulaşmıyor: tarayıcı onu kendi içinde siliyor, ve secret "
+      + "bulgularında dosyanın kendisi okunmuyor. Anahtarı görmek için "
+      + "dosyaya bakman gerekir — ve bakman gereken şey onu oradan "
+      + "kaldırıp iptal etmek.";
+    host.appendChild(note);
+  } else if (block.fromDisk) {
     const note = document.createElement("p");
     note.className = "code-note";
     note.textContent =
@@ -677,6 +704,88 @@ function memberName(teamId, userId) {
   return member ? member.username : "#" + userId;
 }
 
+// Bulguyu hangi tür çalışmanın ürettiği. Aracın adı ile türü ayrı iki şey:
+// rozette araç yazıyor (hangi araç olduğu önemli), süzgeçte tür (kaç farklı
+// araçla SAST yapıldığı süzerken önemli değil).
+const SOURCE_KIND = {
+  bandit: "SAST",
+  semgrep: "SAST",
+  codeql: "SAST",
+  "pip-audit": "SCA",
+  gitleaks: "SECRET",
+  nuclei: "DAST",
+  manual_pentest: "MANUAL PENTEST",
+  manual: "MANUAL",
+};
+
+function sourceKind(f) {
+  const src = (f.source || "manual").toLowerCase();
+  // Tanımadığımız bir araç kendi grubu olur. Bilinen bir kutuya zorlamak,
+  // yüklenen bir SARIF'i olmadığı bir şey gibi göstermek olurdu.
+  return SOURCE_KIND[src] || src.toUpperCase();
+}
+
+function sourceBadge(f) {
+  const src = (f.source || "manual").toLowerCase();
+  return (src === "manual_pentest" ? "pentest" : src).toUpperCase();
+}
+
+// SCA ve secret bulgularının taşıdığı, kendi kolonu olmayan alanlar. Sırayla
+// yazılıyorlar çünkü sıra bilgi taşıyor: hangi paket, hangi sürüm, nereye
+// yükseltilecek. Olmayan alan hiç çizilmiyor — boş bir "Düzeltilen sürüm:"
+// satırı, düzeltme olmadığını değil, veriyi bilmediğimizi söylerdi.
+function detailRows(f) {
+  const d = f.details;
+  if (!d || typeof d !== "object") return null;
+
+  const rows = [];
+
+  if (d.kind === "sca") {
+    rows.push(["Paket", d.package]);
+    rows.push(["Kurulu sürüm", d.installed_version]);
+    rows.push(["Açık", d.cve && d.cve !== d.vulnerability_id
+      ? `${d.vulnerability_id} · ${d.cve}` : d.vulnerability_id]);
+    rows.push(["Düzeltilen sürüm", (d.fixed_versions || []).join(", ")]);
+  } else if (d.kind === "secret") {
+    rows.push(["Secret türü", d.secret_type]);
+    rows.push(["Dosya", d.file]);
+    rows.push(["Satır", d.line == null ? "" : String(d.line)]);
+    rows.push(["Kural", d.rule]);
+    // "Secret değeri" diye bir satır yok ve olmayacak. Değer bu uygulamaya
+    // hiç girmiyor: tarayıcı kendi içinde siliyor.
+  } else {
+    return null;
+  }
+
+  rows.push(["Tarayıcı", (f.source || "").toUpperCase()]);
+
+  const dl = document.createElement("dl");
+  dl.className = "fdetails";
+  let drew = false;
+
+  rows.forEach(([label, value]) => {
+    if (!value) return;
+    const dt = document.createElement("dt"); dt.textContent = label;
+    const dd = document.createElement("dd"); dd.textContent = value;
+    dl.append(dt, dd);
+    drew = true;
+  });
+
+  if (!drew) return null;
+
+  // Kritikliğin nereden geldiği. Bu iki tarayıcı da derecelendirme vermiyor;
+  // verdiklerini sanmak, SLA'nın dayandığı sayıyı uydurmak olurdu.
+  if (d.severity_source === "securetask-default") {
+    const note = document.createElement("p");
+    note.className = "fdetails-note";
+    note.textContent =
+      "Kritiklik SecureTask varsayılanı — bu tarayıcı derecelendirme vermiyor.";
+    dl.appendChild(note);
+  }
+
+  return dl;
+}
+
 function findingMeta(f) {
   const meta = document.createElement("div");
   meta.className = "meta";
@@ -692,9 +801,9 @@ function findingMeta(f) {
   }
   if (f.source && f.source !== "manual") {
     const src = document.createElement("span");
-    src.className = "src";
-    src.textContent = f.source;
-    src.title = f.source_ref || "";
+    src.className = "src src-" + sourceKind(f).toLowerCase().replace(/\s+/g, "-");
+    src.textContent = sourceBadge(f);
+    src.title = `${sourceKind(f)} · ${f.source}` + (f.source_ref ? ` · ${f.source_ref}` : "");
     meta.appendChild(src);
   }
   if (f.team_id) {
@@ -924,6 +1033,8 @@ function findingRow(f) {
   }
   body.appendChild(wrap);
   body.appendChild(findingMeta(f));
+  const details = detailRows(f);
+  if (details) body.appendChild(details);
   const clock = slaBar(f);
   if (clock) body.appendChild(clock);
   if (f.status === "accepted_risk" && f.accepted_reason) {
@@ -1060,7 +1171,7 @@ function renderMyList() {
   const shown = myFindings
     .filter(f => filter === "all" ? true : filter === "open" ? !isClosed(f) : isClosed(f))
     .filter(f => !sevPick || f.severity === sevPick)
-    .filter(f => !srcPick || (f.source || "manual") === srcPick)
+    .filter(f => !srcPick || sourceKind(f) === srcPick)
     .filter(f => !overdueOnly || isOverdue(f))
     .filter(matchesQuery)
     .sort((a, b) => {
@@ -1094,18 +1205,20 @@ function renderMyList() {
 // nuclei görünür — hiç kullanılmamış bir seçenek sunmanın anlamı yok.
 function refreshSourceOptions() {
   const select = document.getElementById("srcFilter");
-  const sources = [...new Set(myFindings.map(f => f.source || "manual"))].sort();
+  // Araç adı değil tür. "SAST" diye süzen biri bandit ile semgrep'i ayırmak
+  // istemiyor; hangi araç olduğu satırdaki rozette zaten yazıyor.
+  const kinds = [...new Set(myFindings.map(sourceKind))].sort();
   const current = select.value;
   select.innerHTML = "";
   const all = document.createElement("option");
   all.value = ""; all.textContent = "Kaynak: hepsi";
   select.appendChild(all);
-  sources.forEach(s => {
+  kinds.forEach(k => {
     const o = document.createElement("option");
-    o.value = s; o.textContent = s;
+    o.value = k; o.textContent = k;
     select.appendChild(o);
   });
-  select.value = sources.includes(current) ? current : "";
+  select.value = kinds.includes(current) ? current : "";
   srcPick = select.value;
 }
 
@@ -2413,6 +2526,9 @@ function fmtDuration(seconds) {
 
 const SCAN_LABEL = {
   queued: "sırada", running: "çalışıyor", completed: "tamamlandı", failed: "başarısız",
+  // Başarısızlık değil: tarayıcı bu makinede yok. Aynı kırmızı kutuya koymak
+  // insanı yanlış problemi aramaya gönderirdi.
+  scanner_unavailable: "tarayıcı kurulu değil",
 };
 
 let scanPoll = null;
@@ -2422,6 +2538,7 @@ let scanKind = "sast";
 
 const SCAN_KIND = {
   sast: {
+    chip: "SAST",
     title: "Statik kod analizi",
     label: "Proje",
     lead: "Kayıtlı bir projenin kaynak kodunu tarar. Kod <çalıştırılmaz> — "
@@ -2430,7 +2547,32 @@ const SCAN_KIND = {
     empty: "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
       + "SCAN_PROJECTS=ad=/yol tanımlanmalı.",
   },
+  sca: {
+    chip: "SCA",
+    title: "Bağımlılık analizi",
+    label: "Proje",
+    lead: "Projenin kendi kodunu değil, kurduğu üçüncü parti bağımlılıkların "
+      + "bilinen açıklarını arar. Yalnızca requirements dosyalarındaki sabit "
+      + "sürümler okunur; hiçbir paket indirilmez veya çalıştırılmaz. "
+      + "Açık veritabanı için ağa çıkar.",
+    button: "SCA taramasını başlat",
+    empty: "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
+      + "SCAN_PROJECTS=ad=/yol tanımlanmalı.",
+  },
+  secret: {
+    chip: "Secret Scan",
+    title: "Secret taraması",
+    label: "Proje",
+    lead: "Kaynak kodda unutulmuş API anahtarı, token ve kimlik bilgisi arar. "
+      + "Bulunan değerin kendisi hiçbir yere yazılmaz: tarayıcı onu kendi "
+      + "içinde siliyor, SecureTask yalnızca dosyayı, satırı ve maskelenmiş "
+      + "hâli görüyor.",
+    button: "Secret taramasını başlat",
+    empty: "Henüz taranabilir proje yapılandırılmamış. Sunucuda .env içinde "
+      + "SCAN_PROJECTS=ad=/yol tanımlanmalı.",
+  },
   dast: {
+    chip: "DAST",
     title: "Dinamik uygulama analizi",
     label: "Hedef",
     lead: "Çalışan bir test/staging uygulamasını kontrollü olarak tarar. "
@@ -2457,6 +2599,15 @@ function scanRow(run) {
       : SCAN_LABEL[run.status] || run.status;
   left.append(when, sub);
 
+  // Hata değil ama sessiz de kalmamalı: "20 satır denetlendi, 7'si atlandı"
+  // bilgisi olmadan "açık bulunamadı" yanlış okunur.
+  if (run.note) {
+    const note = document.createElement("div");
+    note.className = "scan-sub scan-note";
+    note.textContent = run.note;
+    left.appendChild(note);
+  }
+
   const state = document.createElement("span");
   state.className = "scan-badge b-" + run.status;
   state.textContent = SCAN_LABEL[run.status] || run.status;
@@ -2482,6 +2633,18 @@ function renderLatest(run) {
     host.appendChild(box);
   };
 
+  // Kurulu olmayan bir tarayıcı, çalışıp bozulan bir tarayıcı değil. İkisini
+  // aynı kırmızı kutuya koymak, insanı yanlış problemi aramaya gönderir:
+  // biri bir dakikada kurulur, diğeri araştırılır.
+  if (run.status === "scanner_unavailable") {
+    const p = document.createElement("p");
+    p.className = "scan-missing";
+    p.textContent = run.error
+      || "Bu tarayıcı bu makinede kurulu değil; tarama çalıştırılmadı.";
+    host.appendChild(p);
+    return;
+  }
+
   if (run.status === "failed") {
     const err = document.createElement("p");
     err.className = "scan-error";
@@ -2495,7 +2658,7 @@ function renderLatest(run) {
     p.className = "chart-note";
     p.textContent = run.status === "queued"
       ? "Tarama sıraya alındı…"
-      : "Kaynak kod taranıyor…";
+      : SCAN_KIND[scanKind] ? SCAN_KIND[scanKind].title + " sürüyor…" : "Taranıyor…";
     host.appendChild(p);
     return;
   }
@@ -2508,6 +2671,13 @@ function renderLatest(run) {
   stat("Çözüldü", String(run.resolved), run.resolved ? "good" : "");
   if (run.reopened) stat("Yeniden açılan", String(run.reopened), "hot");
   stat("Süre", fmtDuration(run.duration) || "—");
+
+  if (run.note) {
+    const note = document.createElement("p");
+    note.className = "scan-note-block";
+    note.textContent = run.note;
+    host.appendChild(note);
+  }
 
   const actions = document.createElement("div");
   actions.className = "scan-actions";
@@ -2559,8 +2729,7 @@ async function loadScans() {
   document.getElementById("scanTitle").textContent = conf.title;
   document.getElementById("scanTargetLabel").textContent = conf.label;
   document.getElementById("scanLead").textContent = conf.lead;
-  document.getElementById("kindSast").classList.toggle("active", scanKind === "sast");
-  document.getElementById("kindDast").classList.toggle("active", scanKind === "dast");
+  renderScanKinds();
 
   // DAST'ta hedefler her zaman "erişilebilir": sunucunun ağdan ulaşıp
   // ulaşamadığını denemeden bilemeyiz, ve denemek zaten taramanın kendisi.
@@ -2629,12 +2798,21 @@ async function loadScans() {
   else if (runs[0] && runs[0].status === "completed") loadFindings().catch(() => {});
 }
 
-document.getElementById("kindSast").onclick = () => {
-  scanKind = "sast"; loadScans().catch(() => {});
-};
-document.getElementById("kindDast").onclick = () => {
-  scanKind = "dast"; loadScans().catch(() => {});
-};
+// Çipler tablodan çiziliyor: beşinci bir tarama türü eklemek, SCAN_KIND'a bir
+// satır eklemek demek — burada ve index.html'de değişecek bir şey yok.
+function renderScanKinds() {
+  const host = document.getElementById("scanKinds");
+  host.innerHTML = "";
+  Object.entries(SCAN_KIND).forEach(([key, conf]) => {
+    const b = document.createElement("button");
+    b.type = "button";
+    b.className = "chip" + (scanKind === key ? " active" : "");
+    b.textContent = conf.chip;
+    b.setAttribute("aria-pressed", scanKind === key ? "true" : "false");
+    b.onclick = () => { scanKind = key; loadScans().catch(() => {}); };
+    host.appendChild(b);
+  });
+}
 
 document.getElementById("scanStart").onclick = async (e) => {
   const project = document.getElementById("scanProject").value;

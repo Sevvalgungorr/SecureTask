@@ -41,6 +41,11 @@ class ScanResult:
     evidence: str = ""
     evidence_start: int | None = None
     evidence_line: int | None = None
+    # What this particular scanner reported that has no field of its own — the
+    # package and fixed version, the rule and the type of credential. Never a
+    # secret value: for the one scanner that sees secrets, this dict is built
+    # from fields that are not the secret, and the check is in parse_gitleaks.
+    details: dict | None = None
 
 
 # A snippet is quoted source code from someone's repository. Long enough to
@@ -308,3 +313,342 @@ def parse_sarif(raw: str) -> tuple[list[ScanResult], int, str]:
             )
 
     return results, skipped, (tool or "sarif")
+
+
+# --- SCA: what the dependencies drag in ------------------------------------
+#
+# The application's own code is one attack surface; the code it installs is
+# another, and usually the larger one. pip-audit reads a manifest and asks a
+# vulnerability service what is known about each pinned version. It does not
+# install anything and it does not run anything — see app/scanner.py for the
+# flags that keep it that way.
+
+# pip-audit reports no severity. Not "sometimes"; the JSON schema has no field
+# for it, on either the PyPI or the OSV service — only the advisory id, the
+# versions that fix it, the aliases and the prose. So this is SecureTask's
+# default for an unrated dependency vulnerability, not a rating anyone's
+# scanner produced, and the finding says so in as many words. Inventing a
+# severity per CVE would be inventing the one number the whole SLA hangs off.
+SCA_SEVERITY = "medium"
+
+SCA_UNRATED = (
+    "pip-audit derecelendirme vermiyor; bu kritiklik SecureTask varsayılanı, "
+    "tarayıcının değerlendirmesi değil."
+)
+
+
+def _preferred_alias(aliases: list) -> str:
+    """A CVE if there is one — that is the identifier people search for."""
+    names = [str(a).strip() for a in aliases if isinstance(a, (str, int))]
+
+    for name in names:
+        if name.upper().startswith("CVE-"):
+            return name
+
+    return names[0] if names else ""
+
+
+def parse_pip_audit(raw: str) -> tuple[list[ScanResult], int, set[str]]:
+    """Return the results, how many entries were unusable, and what was audited.
+
+    The third value is the point of doing this here rather than in the generic
+    importer. pip-audit lists **every** dependency it examined, including the
+    ones with nothing wrong — so a re-scan knows exactly which packages were
+    looked at, and a vulnerability that has since been patched can be closed
+    because the package was checked and came back clean. Guessing that from the
+    findings alone is not possible: a package with no vulnerabilities produces
+    no results to infer coverage from.
+    """
+    try:
+        document = json.loads(raw)
+    except json.JSONDecodeError:
+        return [], 0, set()
+
+    if not isinstance(document, dict):
+        return [], 0, set()
+
+    results: list[ScanResult] = []
+    skipped = 0
+    audited: set[str] = set()
+
+    for dep in document.get("dependencies") or []:
+        if not isinstance(dep, dict):
+            skipped += 1
+            continue
+
+        package = str(dep.get("name") or "").strip()
+        version = str(dep.get("version") or "").strip()
+
+        if not package:
+            skipped += 1
+            continue
+
+        # Examined, whether or not anything was found. This is the coverage.
+        audited.add(package.lower())
+
+        for vuln in dep.get("vulns") or []:
+            if len(results) >= MAX_RESULTS:
+                break
+
+            if not isinstance(vuln, dict):
+                skipped += 1
+                continue
+
+            vuln_id = str(vuln.get("id") or "").strip()
+
+            if not vuln_id:
+                skipped += 1
+                continue
+
+            aliases = vuln.get("aliases") if isinstance(vuln.get("aliases"), list) else []
+            fixes = [
+                str(f).strip()
+                for f in (vuln.get("fix_versions") or [])
+                if isinstance(f, (str, int))
+            ]
+            cve = _preferred_alias(aliases)
+            label = cve or vuln_id
+
+            fix_text = (
+                f"Düzeltilen sürüm: {', '.join(fixes)}" if fixes
+                else "Yayımlanmış bir düzeltme sürümü bildirilmedi."
+            )
+            description = " · ".join(
+                part for part in (
+                    str(vuln.get("description") or "").strip(),
+                    f"Kurulu sürüm: {version}" if version else "",
+                    fix_text,
+                    SCA_UNRATED,
+                ) if part
+            )
+
+            results.append(
+                ScanResult(
+                    # The advisory id, not the CVE: it is what pip-audit keys
+                    # on, so it is stable across runs. The CVE is what a person
+                    # searches for, so it is in the title and the detail.
+                    source_ref=vuln_id[:255],
+                    title=f"{package} {version} · {label}"[:200],
+                    # The package is the asset. A dependency vulnerability
+                    # lives on the dependency, the way a code finding lives on
+                    # a file — so the same CVE in the same package is one
+                    # finding across re-scans rather than a new one each time.
+                    asset=package[:255],
+                    severity=SCA_SEVERITY,
+                    description=description[:2000],
+                    details={
+                        "kind": "sca",
+                        "package": package,
+                        "installed_version": version,
+                        "vulnerability_id": vuln_id,
+                        "cve": cve,
+                        "fixed_versions": fixes,
+                        "aliases": [str(a) for a in aliases][:10],
+                        # So the interface can say where the rating came from
+                        # instead of presenting it as the scanner's.
+                        "severity_source": "securetask-default",
+                    },
+                )
+            )
+
+    return results, skipped, audited
+
+
+# --- Secret scanning: the one scanner whose output is itself dangerous ------
+#
+# Everything else here reports *about* code. This one reports code, and the
+# code is a live credential. Gitleaks emits the matched line and the secret it
+# found as separate fields, which is what makes it safe to use: the secret can
+# be removed from the line before anything else in this application sees it.
+#
+# That removal happens HERE, in the parser, and not later. There is no layer
+# below this that has the raw value, so there is no persistence, log, audit
+# entry, API response, AI prompt or code viewer that could leak one — not
+# because each of them is careful, but because none of them is ever given it.
+#
+# Deliberately not SARIF, which gitleaks can also emit: its SARIF `snippet`
+# carries the raw secret, and the SARIF reader above copies snippets straight
+# into `evidence`. Reading the richer format would have been less code and a
+# credential in the database.
+
+# Gitleaks does not rate its rules either. A working credential committed to a
+# repository is not a medium; this is SecureTask's policy and the finding says
+# so, the same way the SCA default does.
+SECRET_SEVERITY = "high"
+
+SECRET_UNRATED = (
+    "Gitleaks derecelendirme vermiyor; bu kritiklik SecureTask varsayılanı."
+)
+
+# How much of a masked value is shown. Enough to recognise which credential is
+# meant — "AKIA…" says AWS, "ghp_…" says GitHub — and not enough to use.
+MASK_PREFIX = 4
+# A fixed number of asterisks, so the mask does not disclose the length of the
+# secret it replaced.
+MASK_BODY = "*" * 12
+
+
+def mask_secret(secret: str) -> str:
+    """The stand-in a secret is replaced by, everywhere it would have appeared."""
+    value = (secret or "").strip()
+
+    if not value:
+        return MASK_BODY
+
+    # Short values are all prefix. Showing four characters of a six-character
+    # value is not a hint, it is most of the secret.
+    if len(value) < 12:
+        return MASK_BODY
+
+    return value[:MASK_PREFIX] + MASK_BODY
+
+
+def _masked_line(match: str, secret: str) -> str:
+    """The matched line with the secret taken out of it, or nothing.
+
+    Returns "" rather than a partially-masked line if the value survives the
+    substitution for any reason. A line that still contains the credential is
+    worse than no line at all, and this is the last place that could tell.
+    """
+    if not match or not secret:
+        return ""
+
+    # The scanner has to agree with itself. If the value it named is not in the
+    # line it reported, the substitution below would be a no-op and this would
+    # return the line untouched — with whatever is actually in it. Checking
+    # only that `secret` is gone afterwards does not catch that: it is already
+    # gone, because it was never there.
+    if secret not in match:
+        return ""
+
+    masked = match.replace(secret, mask_secret(secret))
+
+    # The check that makes the rest of the application's guarantees true.
+    if secret in masked:
+        return ""
+
+    return masked.strip()[:MAX_EVIDENCE]
+
+
+# Past this, the description is a sentence rather than a name. "Generic API
+# Key" is a title; "Discovered a potential authorization token provided in a
+# curl command header" is prose, and prose in a title makes every row in the
+# list the same height as a paragraph.
+MAX_SECRET_TYPE = 48
+
+_LEAD = (
+    "Detected a ", "Detected an ", "Detected ",
+    "Discovered a ", "Discovered an ", "Discovered ",
+    "Identified a ", "Identified an ", "Identified ",
+    "Uncovered a ", "Uncovered an ", "Uncovered ",
+    "Found a ", "Found an ", "Found ",
+)
+
+
+def _secret_type(description: str, rule_id: str) -> str:
+    """A readable name for what was found.
+
+    Gitleaks' own prose where it is short enough to be a name, and the rule id
+    made readable where it is not. Truncating the sentence instead would
+    produce "Discovered a potential authorization token provided in a…", which
+    is a name nobody can scan a list by.
+    """
+    text = str(description or "").split(",")[0].split(".")[0].strip()
+
+    for prefix in _LEAD:
+        if text.lower().startswith(prefix.lower()):
+            text = text[len(prefix):]
+            break
+
+    if text and len(text) <= MAX_SECRET_TYPE:
+        return text
+
+    # "curl-auth-header" → "Curl Auth Header". The rule id is what gitleaks
+    # keys on, so it is the most precise short name available.
+    pretty = " ".join(word.capitalize() for word in rule_id.replace("_", "-").split("-"))
+
+    return (pretty or rule_id).strip()[:120]
+
+
+def parse_gitleaks(raw: str) -> tuple[list[ScanResult], int]:
+    """Read gitleaks' JSON report, leaving every secret behind.
+
+    `Secret` and `Match` are read and neither is returned. What comes out is
+    the file, the line, the rule, the kind of credential, and a masked preview
+    of the line — which is what someone needs to go and remove it.
+    """
+    try:
+        entries = json.loads(raw or "[]")
+    except json.JSONDecodeError:
+        return [], 0
+
+    if entries is None:
+        return [], 0
+
+    if not isinstance(entries, list):
+        return [], 0
+
+    results: list[ScanResult] = []
+    skipped = 0
+
+    for entry in entries[:MAX_RESULTS]:
+        if not isinstance(entry, dict):
+            skipped += 1
+            continue
+
+        rule_id = str(entry.get("RuleID") or entry.get("ruleID") or "").strip()
+        path = str(entry.get("File") or entry.get("file") or "").strip().lstrip("/")
+        line = entry.get("StartLine") or entry.get("startLine")
+        line = line if isinstance(line, int) and line > 0 else None
+
+        if not rule_id or not path:
+            skipped += 1
+            continue
+
+        secret_type = _secret_type(entry.get("Description"), rule_id)
+        # Read here, never returned. Both are raw.
+        preview = _masked_line(
+            str(entry.get("Match") or ""), str(entry.get("Secret") or "")
+        )
+
+        # rule + file + line, which is gitleaks' own fingerprint minus the
+        # part that would need the secret. Two different keys in one file are
+        # two findings; the same key found again is the same finding.
+        source_ref = f"{rule_id}:{line}" if line else rule_id
+
+        results.append(
+            ScanResult(
+                source_ref=source_ref[:255],
+                title=secret_type[:200],
+                asset=path[:255],
+                severity=SECRET_SEVERITY,
+                # Gitleaks' own prose about the rule, not a restatement of the
+                # title — the file, line and rule are already their own fields
+                # and repeating them here makes every row a paragraph tall.
+                description=" · ".join(
+                    part for part in (
+                        str(entry.get("Description") or "").strip(),
+                        SECRET_UNRATED,
+                    ) if part
+                )[:2000],
+                # The masked line, in the field the code viewer already reads.
+                # It is one line, so the flagged line is inside the block and
+                # the viewer never asks the server to open the file — which is
+                # also refused for this kind of finding, in main.py.
+                evidence=preview,
+                evidence_start=line if preview else None,
+                evidence_line=line if preview else None,
+                details={
+                    "kind": "secret",
+                    "rule": rule_id,
+                    "secret_type": secret_type,
+                    "file": path,
+                    "line": line,
+                    "severity_source": "securetask-default",
+                    # Deliberately absent: there is no "secret" key here, and
+                    # no code anywhere that would put one in.
+                },
+            )
+        )
+
+    return results, skipped

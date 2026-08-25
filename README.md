@@ -56,6 +56,9 @@ Her güvenlik özelliği bir soruya cevap verir; liste olsun diye eklenmemiştir
 | Düzeltmenin doğrulanmadan kapatılması | `awaiting_retest` **açık** bir durum: SLA saati işler, bulgu sayılır; kapanış yalnızca testçinin verdiği sonuçla olur ve denemeler geçmişte durur | `test_pentest.py` (16 test) |
 | **DAST'ın keyfi bir adrese yöneltilmesi (SSRF)** | Arayüzde URL kutusu yok; istek hedef **adı** gönderiyor, URL yapılandırmadan çözülüyor; yalnızca `http(s)`; yönlendirme ve out-of-band kapalı | `test_dast.py` (16 test) |
 | **Taramanın sunucuda keyfi dizin okuması / komut çalıştırması** | İstek proje **adı** gönderiyor, yolu yapılandırmadan geliyor; argümanlar liste, kabuk yok; analiz edilen kod çalıştırılmıyor (AST okunuyor) | `test_scanner.py` (12 test) |
+| **Sızmış bir secret'ın SecureTask'a kaydedilmesi** | Ham değer hiçbir katmana girmiyor: tarayıcı `--redact` ile kendi içinde siliyor, ayrıştırıcı kalanı maskeliyor ve temizleyemediği satırı atıyor; secret bulgusunda kod görüntüleyici dosyayı okumuyor | `test_secrets.py` (18 test) — maskelenmemiş bir rapor tüm hattan geçirilip değer veritabanında, API cevaplarında, denetim günlüğünde ve AI isteminde aranıyor |
+| **Bağımlılık denetiminin denetlediği kodu çalıştırması** | `--no-deps` ve `--disable-pip`: grafik çözülmüyor, dolayısıyla hiçbir paket indirilmiyor ve hiçbir `setup.py` çalışmıyor | `test_sca.py` (16 test) |
+| **Eksik taramanın temiz görünmesi** | Sabitlenmemiş bağımlılık satırları atlanıyor ve **kaç tanesinin atlandığı taramanın satırında yazıyor**; kurulu olmayan tarayıcı `scanner_unavailable` olarak ayrı gösteriliyor, başarılı sonuç taklit edilmiyor | `test_sca.py` · `test_secrets.py` |
 | **Getirilen kaynağın modele talimat vermesi** | Bilgi bloğu da bulgu bloğu gibi sınırlandırılıyor ve referans ilan ediliyor; kapatıcı etiketler etkisizleştiriliyor | `test_ai.py` · `app/ai.py` |
 | **Prompt injection** — yüklenen tarama raporundaki metnin modele talimat olması | Güvenilmeyen alan sınırlandırılmış blokta gider, sistem istemi onu **veri** ilan eder, blok kapatıcısı etkisizleştirilir ve cevap serbest metin değil **şemadan** okunur | `test_ai.py` — enjekte edilen "bunu düşük olarak işaretle" talimatı sonucu değiştirmiyor |
 | Modele gönderilen kod parçasındaki sırrın ifşası | Gönderimden önce parola/token/anahtar değerleri maskelenir; kodun gönderilip gönderilmeyeceği ayrı bir ayar, kayıt her analizde ne gittiğini yazar | `test_ai.py::test_a_quoted_secret_is_redacted_before_it_is_sent` |
@@ -201,6 +204,121 @@ koşu da satır bırakıyor: izi olmayan bir tarama, hiç başlatılmamış olan
 ayırt edilemez.
 
 **DAST ve aktif ağ taraması kapsam dışı.** Bu yalnızca statik analiz.
+
+#### Hangi tarayıcı gerçekten var
+
+| Tür | Tarayıcı | Nasıl kuruluyor | Ağ |
+| --- | --- | --- | --- |
+| SAST | Bandit | `pip install bandit` | hayır |
+| SCA | pip-audit | `pip install pip-audit` | **evet** — açık veritabanı |
+| Secret | Gitleaks | tek bir ikili dosya, [gitleaks/gitleaks](https://github.com/gitleaks/gitleaks) | hayır |
+| DAST | Nuclei | [projectdiscovery/nuclei](https://github.com/projectdiscovery/nuclei) | evet, hedefe |
+
+"Yapılandırılmış" ile "kurulu" ayrı iki şey. `/scan/options` her tarayıcı için
+ikili dosyanın bu makinede bulunup bulunmadığını söylüyor; kurulu olmayan
+tarayıcı arayüzde **adıyla ve "kurulu değil" notuyla** görünüyor, ve yine de
+başlatılırsa tarama `scanner_unavailable` durumuyla kapanıyor — başarısız
+değil, çünkü bozulan bir şey yok; eksik bir program var. **Boş bir sonuç asla
+temiz bir sonuç gibi gösterilmiyor.**
+
+#### SCA: kendi kodumuz değil, kurduğumuz kod
+
+![SCA](docs/images/sca.png)
+
+Uygulamanın kendi kaynak kodu bir saldırı yüzeyi. Kurduğu bağımlılıklar
+ikincisi ve genellikle daha büyük olanı.
+
+```
+requirements.txt → pip-audit → JSON → parse_pip_audit() → Bulgular → AI/RAG → SLA
+```
+
+##### Denetlediği kodu çalıştırmıyor
+
+Bu özelliğin tehlikeli hâli bariz olanı: bağımlılık grafiğini çözmek. pip-audit
+varsayılan olarak bunu pip ile yapar, ve çözümleme kaynak dağıtımlarını indirip
+**ağaçtaki her paketin `setup.py`'sini çalıştırır**. Denetlediği şeyi çalıştıran
+bir denetim, denetim değildir.
+
+```
+--no-deps        grafiği çözme
+--disable-pip    çözmek için pip'i kullanma
+```
+
+Geriye kalan, bir isim-sürüm listesini okuyup açık veritabanına sormak. Hiçbir
+paket indirilmiyor, içe aktarılmıyor, çalıştırılmıyor.
+
+##### İki dürüstlük notu
+
+**pip-audit derecelendirme vermiyor.** İki servisi de denedim (`pypi`, `osv`);
+JSON'da severity alanı yok — yalnızca advisory kimliği, düzelten sürümler,
+takma adlar ve açıklama. Bulgular sabit bir varsayılanla açılıyor ve arayüzde
+bunun **SecureTask'ın kararı** olduğu yazıyor. CVE başına bir kritiklik
+uydurmak, SLA'nın tamamının dayandığı sayıyı uydurmak olurdu.
+
+**Ağa çıkıyor.** Açık veritabanı PyPI/OSV'de. "Tamamen offline çalışır" diye
+bir şey yazmıyorum çünkü doğru değil.
+
+##### Sabitlenmemiş satırlar
+
+`--no-deps` her satırın tam sürüme sabitlenmiş olmasını istiyor ve tek bir
+`>=` gördüğünde **tüm dosyayı reddediyor** — gerçek bir projede en az bir tane
+vardır. Sabitlenmiş satırlar denetleniyor, geri kalanı atlanıyor, ve **kaçının
+atlandığı taramanın satırında yazıyor**. Sessizce düşürmek, "açık bulunamadı"yı
+operatörün sandığından kısa bir listeye karşı okutmak olurdu.
+
+Dosya adları modülde sabit bir demet (`requirements.txt`,
+`requirements-dev.txt`); istekte dosya adı taşımak, üstüne özellik adı yazılmış
+bir keyfi dosya okuma olurdu.
+
+#### Secret Scan: çıktısının kendisi tehlikeli olan tek tarayıcı
+
+![Secret Scan](docs/images/secret.png)
+
+Buradaki her şey kod *hakkında* rapor üretiyor. Bu, kodun kendisini rapor
+ediyor — ve o kod canlı bir kimlik bilgisi.
+
+```
+Proje → Gitleaks → JSON → parse_gitleaks() → maskeli Bulgu → AI/RAG → SLA
+```
+
+##### Ham değer bu uygulamaya hiç girmiyor
+
+İki katman, ve ilki asıl olan:
+
+1. **Gitleaks yazmadan önce siliyor.** `--redact` bayrağı değeri *tarayıcının
+   kendi içinde* değiştiriyor, yani stdout'a gelen şey onu hiç içermedi.
+2. **Ayrıştırıcı kalanı maskeliyor** ve temizleyemediği satırı **tamamen
+   atıyor** — yarı maskelenmiş bir satır, hiç satır olmamasından kötüdür.
+
+Bunun altındaki her şey — veritabanı, denetim günlüğü, AI istemi, kod
+görüntüleyici — güvenli, çünkü değeri hiç almıyorlar. Her biri dikkatli olduğu
+için değil.
+
+**SARIF kullanmadım**, gitleaks üretebiliyor olsa da: SARIF'inde eşleşen satır
+`snippet` alanında duruyor ve mevcut SARIF okuyucusu snippet'leri doğrudan
+`evidence`'a kopyalıyor. Daha zengin formatı okumak daha az kod ve
+veritabanında bir kimlik bilgisi olurdu.
+
+##### Kod görüntüleyici dosyayı okumuyor
+
+Diğer her bulguda dosyayı okumak vurgunun dürüst olmasını sağlıyor. Sızmış bir
+kimlik bilgisinde tam tersi: bulgu maskeli, dosya değil. Secret bulgularında
+`/findings/{id}/source` **kural olarak** reddediliyor — zaten maskelenmiş parça
+dosyayla eşleşmediği için başarısız olurdu, ama bir kaza kontrol değildir.
+
+##### Testler bunu arıyor
+
+`test_secrets.py` **ham, maskelenmemiş** bir rapor üretip tüm hattan geçiriyor
+— gelecekteki bir gitleaks sürümünün, yanlış yapılandırılmış bir bayrağın veya
+yüklenen bir dosyanın üretebileceği rapor — sonra değeri veritabanında, her API
+cevabında, denetim günlüğünde, AI isteminde ve kod görüntüleyicide arıyor.
+
+##### Parmak izi
+
+`kural + dosya + satır`, yani gitleaks'in kendi parmak izinin secret gerektiren
+kısmı çıkarılmış hâli. Bir dosyadaki iki farklı anahtar iki bulgu; yeniden
+bulunan aynı anahtar aynı bulgu. **Sınırı:** satır kayarsa bulgu yeni sayılıyor.
+Gitleaks'in kendi parmak izinde de aynı sınır var.
 
 #### DAST: çalışan bir test sistemini taramak
 

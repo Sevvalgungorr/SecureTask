@@ -23,7 +23,7 @@ from app.auth import (
 )
 from app.config import AI_HOURLY_LIMIT, SESSION_HTTPS_ONLY, SESSION_SECRET
 from app.database import SessionLocal, engine, get_db
-from app.importers import parse_nuclei, parse_sarif
+from app.importers import parse_gitleaks, parse_nuclei, parse_pip_audit, parse_sarif
 from app.monitor import TargetRefused, assert_target_allowed, run_checks
 from app.source import SourceUnavailable, window_for
 from app.models import (
@@ -879,6 +879,7 @@ def _ingest(
                 evidence=result.evidence or None,
                 evidence_start=result.evidence_start,
                 evidence_line=result.evidence_line,
+                details=result.details or None,
                 owner_id=user.id,
                 team_id=team_id,
             )
@@ -902,6 +903,12 @@ def _ingest(
                 existing.evidence = result.evidence
                 existing.evidence_start = result.evidence_start
                 existing.evidence_line = result.evidence_line
+
+            # Same reasoning: a dependency's installed version changes between
+            # scans, and the fixed version can appear after the advisory does.
+            # The metadata is the scanner's current statement, not a judgement.
+            if result.details:
+                existing.details = result.details
 
             escalated_from = _escalate_from_source(existing, result.severity)
 
@@ -1428,6 +1435,24 @@ def finding_source(
     """
     finding = _get_visible_finding(finding_id, user, db)
 
+    # The one kind of finding this may not serve.
+    #
+    # Everywhere else, reading the file is what makes the highlight honest. For
+    # a leaked credential it would be the opposite: the finding is masked, the
+    # file is not, and answering here would hand back the exact line the whole
+    # feature exists to keep out of this application — through the endpoint the
+    # code viewer calls automatically.
+    #
+    # It would in fact already fail, because the masked evidence cannot match
+    # the file and window_for() checks that. But an accident is not a control.
+    # This is the rule, written down, in front of the check.
+    if _is_secret_finding(finding):
+        raise HTTPException(
+            status_code=404,
+            detail="Secret bulgularında dosya içeriği okunmaz; "
+                   "yalnızca maskelenmiş satır gösterilir.",
+        )
+
     try:
         return window_for(
             finding.asset,
@@ -1903,6 +1928,7 @@ def _scan_view(row: ScanRun) -> dict:
         "status": row.status,
         "started_at": row.started_at,
         "finished_at": row.finished_at,
+        "note": row.note or "",
         "created": row.created,
         "reopened": row.reopened,
         "unchanged": row.unchanged,
@@ -1918,7 +1944,23 @@ def _scan_view(row: ScanRun) -> dict:
     }
 
 
-def _resolve_stale(db, user, tool: str, results: list) -> int:
+def _is_secret_finding(finding) -> bool:
+    """Did a secret scanner produce this?
+
+    Two answers, and either one is enough. `source` is the scanner that filed
+    it, which is the reliable one. `details["kind"]` covers a finding whose
+    scanner has since been renamed or removed from the table — the record of
+    what it is outliving the record of what produced it.
+    """
+    if (finding.source or "") in scanner.of_kind(scanner.SECRET):
+        return True
+
+    details = finding.details if isinstance(finding.details, dict) else {}
+
+    return details.get("kind") == "secret"
+
+
+def _resolve_stale(db, user, tool: str, results: list, covered: set | None = None) -> int:
     """Close findings this scan covered but no longer reports.
 
     This is the RESOLVED half of a re-scan, and it is only sound because *we*
@@ -1935,10 +1977,27 @@ def _resolve_stale(db, user, tool: str, results: list) -> int:
     An accepted risk is never touched. Someone argued for it, with a second
     factor and an expiry; a scanner not mentioning the file this time is not
     an argument against that.
+
+    `covered` is the set of assets the run actually examined, when the scanner
+    is able to say. A dependency audit can: pip-audit lists every package it
+    looked at, including the ones it found nothing wrong with, so a patched
+    vulnerability closes because the package was checked and came back clean.
+    Inferring that from the results is impossible — a clean package produces no
+    result to infer from — which is why the fallback below is only a heuristic
+    and why the scanner's own answer is used when there is one.
     """
     seen = {(r.asset, r.source_ref) for r in results}
-    # The parts of the tree this run reported on, by first path segment.
-    covered = {r.asset.split("/", 1)[0] for r in results if r.asset}
+    # Whether `covered` names assets or path prefixes. The scanner-supplied set
+    # is exact and case-insensitive (package names are); the fallback is a set
+    # of directory names and is compared as written.
+    exact = covered is not None
+
+    if covered is None:
+        # Nothing better available: assume a run covered the parts of the tree
+        # it reported on, by first path segment. Conservative — the last
+        # finding in a directory does not close, because the directory stops
+        # being mentioned — and that is the safe direction to be wrong in.
+        covered = {r.asset.split("/", 1)[0] for r in results if r.asset}
 
     if not covered:
         return 0
@@ -1959,7 +2018,12 @@ def _resolve_stale(db, user, tool: str, results: list) -> int:
         if (finding.asset, finding.source_ref) in seen:
             continue
 
-        if finding.asset.split("/", 1)[0] not in covered:
+        # An exact set of assets is matched whole; a set of path prefixes is
+        # matched against the first segment. Both answer the same question —
+        # did this run look at the thing this finding is about.
+        key = finding.asset.lower() if exact else finding.asset.split("/", 1)[0]
+
+        if key not in covered:
             continue
 
         finding.status = "fixed"
@@ -1994,6 +2058,15 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
 
         try:
             result = scanner.run(project, scanner_key)
+        except scanner.ScannerMissing as exc:
+            # Its own outcome, not a failure. The operator has not misconfigured
+            # anything and nothing broke: a program is not on the machine, and
+            # saying that plainly is the difference between a fix and a hunt.
+            row.status = "scanner_unavailable"
+            row.error = str(exc)[:400]
+            row.finished_at = datetime.now(timezone.utc)
+            db.commit()
+            return
         except (scanner.ScanRefused, scanner.ScanFailed) as exc:
             row.status = "failed"
             row.error = str(exc)[:400]
@@ -2005,12 +2078,23 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
         # emits SARIF, so there is nothing new to parse and nothing new to
         # decide: same deduplication, same "a scan may not overwrite a
         # judgement" rule, same audit line.
-        # The reader that already exists for whatever this scanner emits.
-        # Bandit writes SARIF, nuclei writes JSONL, and both formats were
-        # already understood here — neither needed a new parser.
+        # The reader for whatever this scanner emits. Bandit writes SARIF and
+        # nuclei writes JSONL, both of which were already understood here. The
+        # two new ones needed readers of their own — pip-audit because its
+        # output carries the coverage that makes a clean re-scan meaningful,
+        # and gitleaks because its output carries live credentials and has to
+        # be stripped of them before anything else in this process sees it.
+        covered = None
+
         if scanner_key == "nuclei":
             results, skipped = parse_nuclei(result.sarif)
             tool = "nuclei"
+        elif scanner_key == "pip-audit":
+            results, skipped, covered = parse_pip_audit(result.sarif)
+            tool = "pip-audit"
+        elif scanner_key == "gitleaks":
+            results, skipped = parse_gitleaks(result.sarif)
+            tool = "gitleaks"
         else:
             results, skipped, tool = parse_sarif(result.sarif)
         user = db.query(User).filter(User.id == user_id).one_or_none()
@@ -2023,9 +2107,12 @@ def _run_scan(scan_id: int, user_id: int, team_id: int | None,
             return
 
         counts = _ingest(db, user, team_id, results, tool or scanner_key, skipped)
-        resolved = _resolve_stale(db, user, tool or scanner_key, results)
+        resolved = _resolve_stale(
+            db, user, tool or scanner_key, results, covered=covered,
+        )
 
         row.status = "completed"
+        row.note = (result.note or "")[:200]
         row.created = counts.get("created", 0)
         row.reopened = counts.get("reopened", 0)
         row.unchanged = counts.get("unchanged", 0)

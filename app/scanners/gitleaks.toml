@@ -1,0 +1,31 @@
+# Gitleaks configuration for scans this application starts.
+#
+# It extends the tool's own rule set rather than replacing it — the rules are
+# gitleaks' business and stay with gitleaks. What is added here is one thing:
+# the directories that are in a project tree but are not the project.
+#
+# Installed dependencies are full of test fixtures containing example keys, and
+# a hit in .venv is a credential the team does not own, cannot rotate and did
+# not commit. Reporting them buries the ones that matter, which is the same
+# reason bandit is given an --exclude list.
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Vendored and generated directories, which are not the project"
+paths = [
+  '''(^|/)\.venv/''',
+  '''(^|/)venv/''',
+  '''(^|/)env/''',
+  '''(^|/)node_modules/''',
+  '''(^|/)\.tox/''',
+  '''(^|/)\.nox/''',
+  '''(^|/)build/''',
+  '''(^|/)dist/''',
+  '''(^|/)\.mypy_cache/''',
+  '''(^|/)\.pytest_cache/''',
+  '''(^|/)__pycache__/''',
+  '''(^|/)site-packages/''',
+  '''(^|/)\.eggs/''',
+]

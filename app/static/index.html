@@ -323,10 +323,10 @@
       <div class="admin-block">
         <div class="list-head">
           <h2 id="scanTitle">Statik kod analizi</h2>
-          <div class="filters">
-            <button class="chip active" id="kindSast" type="button">SAST</button>
-            <button class="chip" id="kindDast" type="button">DAST</button>
-          </div>
+          <!-- Dört tarama türü, tek liste. Düğmeler burada değil app.js'te
+               üretiliyor: türlerin tanımı zaten orada bir tablo ve aynı şeyi
+               iki yerde tutmak, ikisinin ayrışması demek. -->
+          <div class="filters" id="scanKinds"></div>
         </div>
         <p class="chart-note scan-lead" id="scanLead"></p>
         <div class="scan-form">
