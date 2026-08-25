@@ -10,6 +10,11 @@
 #   SECURETASK_API_URL    örn. https://securetask.example.test
 #   SECURETASK_CI_TOKEN   SecureTask → DevSecOps → "Depo bağla" ile üretilir
 #
+# İkisi de tanımlı değilse taramalar yine çalışıyor, sonuç yalnızca
+# gönderilmiyor ve derleme kırmızıya dönmüyor: fork'lardan gelen çalışmalara
+# GitHub zaten secrets vermiyor, ve "entegrasyon bağlı değil" ile "tarama
+# başarısız" aynı şey değil.
+#
 # Jeton yalnızca bu deponun tarama sonuçlarını bildirebiliyor. Bulguları
 # okuyamıyor, bir durumu değiştiremiyor, riski kabul edemiyor ve başka bir
 # depoya dokunamıyor.
@@ -39,6 +44,31 @@ jobs:
   security:
     name: CI · tests and security scans
     runs-on: ubuntu-latest
+
+    # Testler gerçek bir Postgres'e karşı çalışıyor: şema üretimde nasıl
+    # davranıyorsa testte de öyle davransın diye. SQLite'a düşmek, göçleri ve
+    # kısıtları hiç sınamamak olurdu.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: securetask
+          POSTGRES_PASSWORD: securetask
+          POSTGRES_DB: securetask_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      DATABASE_URL: postgresql+psycopg2://securetask:securetask@localhost:5432/securetask_test
+      TEST_DATABASE_URL: postgresql+psycopg2://securetask:securetask@localhost:5432/securetask_test
+      OIDC_CLIENT_ID: test-client
+      OIDC_CLIENT_SECRET: test-secret
+      SESSION_SECRET: test-session-secret
 
     steps:
       - uses: actions/checkout@v4
@@ -114,36 +144,42 @@ jobs:
       # --- Secret scanning -----------------------------------------------
       #
       # --redact bu dosyadaki en önemli bayrak. Onsuz gitleaks bulduğu kimlik
-      # bilgisini raporuna yazıyor, ve o rapor bir iş akışı günlüğünden,
-      # bir artefakttan ve bir HTTP isteğinden geçiyor. Onunla, değer
-      # gitleaks'in kendi içinde siliniyor.
+      # bilgisini raporuna yazıyor, ve o rapor bir iş akışı günlüğünden, bir
+      # artefakttan ve bir HTTP isteğinden geçiyor. Onunla, değer gitleaks'in
+      # kendi içinde siliniyor ve SecureTask'a hiç ulaşmıyor.
       #
       # JSON, SARIF değil: gitleaks'in SARIF'i eşleşen satırı `snippet`
-      # alanında taşıyor. SecureTask zaten SARIF gövdesini secret taraması
-      # olarak kabul etmiyor — ama iki taraf da doğru olsun.
+      # alanında taşıyor. SecureTask zaten secret taraması olarak SARIF
+      # gövdesini reddediyor — ama iki taraf da doğru olsun.
+      #
+      # Eylem yerine ikili dosya: çıktı biçimi bizim seçimimiz olsun ve deponun
+      # kendi allowlist yapılandırması uygulansın diye.
+      - name: Install gitleaks
+        run: |
+          curl -sSfL -o gitleaks.tar.gz \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          tar xzf gitleaks.tar.gz gitleaks
+          ./gitleaks version
+        env:
+          GITLEAKS_VERSION: 8.28.0
+
       - name: Secret Scan · Gitleaks
         id: secret
         continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
-        env:
-          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
-          GITLEAKS_ENABLE_SUMMARY: "false"
-
-      - name: Normalise gitleaks output
-        if: always()
-        continue-on-error: true
         run: |
-          # Eylem raporu results.sarif olarak da bırakabiliyor; SecureTask'a
-          # yalnızca JSON gidiyor. Yoksa boş bir dizi değil, "çalışmadı"
-          # bildirilecek — boş bir rapor, temiz bir depo gibi okunur.
-          test -f results.json || echo "" > results.json
+          ./gitleaks dir . \
+            --config app/scanners/gitleaks.toml \
+            --report-format json \
+            --report-path gitleaks.json \
+            --no-banner --redact || true
+          test -s gitleaks.json
 
       - name: Report Secret Scan
         if: always()
         run: |
           python .github/scripts/securetask_report.py \
             --scan-type secret \
-            --report results.json \
+            --report gitleaks.json \
             --succeeded "${{ steps.secret.outcome == 'success' }}"
         env:
           SECURETASK_CI_TOKEN: ${{ secrets.SECURETASK_CI_TOKEN }}

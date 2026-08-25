@@ -41,6 +41,27 @@ def env(name: str, required: bool = True) -> str:
     return value
 
 
+def configured() -> bool:
+    """Is there a SecureTask to report to?
+
+    Two ways there is not, and neither is a broken build:
+
+    * nobody has set the secrets up yet — the workflow is in the repository
+      before the integration is;
+    * the run came from a fork, and GitHub does not give forks a repository's
+      secrets, on purpose.
+
+    In both cases the scans still ran and their results are still in the job's
+    log. Failing here would turn "the integration is not connected" into a red
+    tick on every pull request, and a red tick people learn to ignore is worse
+    than no tick.
+    """
+    return bool(
+        (os.environ.get("SECURETASK_API_URL") or "").strip()
+        and (os.environ.get("SECURETASK_CI_TOKEN") or "").strip()
+    )
+
+
 def context() -> dict:
     """What identifies this run, from GitHub's own environment.
 
@@ -148,6 +169,14 @@ def main() -> int:
     parser.add_argument("--gate", action="store_true")
     parser.add_argument("--release", action="store_true")
     args = parser.parse_args()
+
+    if not configured():
+        print(
+            "::notice::SECURETASK_API_URL / SECURETASK_CI_TOKEN tanımlı değil — "
+            "sonuç gönderilmedi. Depoyu SecureTask'ta DevSecOps → 'Depo bağla' "
+            "ile kaydedip jetonu GitHub Secrets'a ekle."
+        )
+        return 0
 
     ctx = context()
 
