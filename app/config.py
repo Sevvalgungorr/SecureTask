@@ -196,6 +196,13 @@ SCAN_TIMEOUT_SECONDS = float(os.getenv("SCAN_TIMEOUT_SECONDS", "180"))
 # something enormous should fail loudly, not fill the database.
 SCAN_MAX_OUTPUT = int(os.getenv("SCAN_MAX_OUTPUT", str(8 * 1024 * 1024)))
 
+# A dependency audit is mostly waiting on somebody else's server: pip-audit
+# asks a vulnerability service about every pinned package. That is network
+# latency multiplied by the size of the manifest, so it needs a longer leash
+# than reading files — and it is the reason this scanner cannot claim to work
+# offline.
+SCA_TIMEOUT_SECONDS = float(os.getenv("SCA_TIMEOUT_SECONDS", "600"))
+
 # --- AI analysis -------------------------------------------------------------
 #
 # A model reads a finding and says how exploitable it looks, what it would cost,

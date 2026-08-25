@@ -268,6 +268,34 @@
     padding: .1rem .4rem; border-radius: 6px; flex-shrink: 0;
     color: var(--muted); background: var(--line-2); border: 1px solid var(--line);
   }
+  /* Secret rozeti tek renkli kalabalıktan ayrılıyor: sızmış bir kimlik
+     bilgisi, listedeki diğer her şeyden farklı bir aciliyet — kapatmak değil,
+     iptal etmek gerekiyor. */
+  .src.src-secret {
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--danger) 30%, transparent);
+  }
+
+  /* SCA/secret bulgularının kendi kolonu olmayan alanları. İki sütun: etiket
+     ve değer; değerler tek tip genişlikte, çünkü sürüm numaraları ve satır
+     numaraları hizalı okunuyor. */
+  .fdetails {
+    display: grid; grid-template-columns: auto 1fr; gap: .1rem .6rem;
+    margin: .45rem 0 0; padding: .5rem .65rem;
+    border-radius: 10px; background: var(--line-2);
+    border: 1px solid var(--line);
+    font-size: .76rem;
+  }
+  .fdetails dt { color: var(--faint); font-weight: 700; }
+  .fdetails dd {
+    margin: 0; color: var(--fg); font-family: var(--mono, ui-monospace, monospace);
+    overflow-wrap: anywhere;
+  }
+  .fdetails-note {
+    grid-column: 1 / -1; margin: .35rem 0 0;
+    font-size: .72rem; color: var(--faint);
+  }
 
   .finding .meta { display: flex; gap: .4rem; align-items: center; margin-top: .35rem; flex-wrap: wrap; }
   /* The ramp tints the chip; the label is always spelled out and the text keeps
@@ -767,6 +795,15 @@
   .scan-actions { display: flex; gap: .5rem; align-items: center; flex: 0 0 auto; align-self: center; }
   .scan-stat.good b { color: var(--ok); }
   .scan-error { margin: 0; font-size: .84rem; color: var(--danger); }
+  /* Kurulu olmayan tarayıcı kırmızı değil: bozulan bir şey yok, eksik bir
+     program var. Renk de bunu söylemeli. */
+  .scan-missing { margin: 0; font-size: .84rem; color: var(--muted); }
+  /* Kutular satır olarak diziliyor (flex); not tam genişlik alıp altlarına
+     düşsün diye kendi satırını zorluyor. */
+  .scan-note-block {
+    flex: 1 0 100%; margin: .1rem 0 0; font-size: .78rem; color: var(--muted);
+  }
+  .scan-note { color: var(--warn, var(--muted)); }
 
   .scan-history { list-style: none; margin: 0; padding: 0; display: grid; gap: .4rem; }
   .scan-item {
@@ -783,7 +820,12 @@
   .b-completed { color: var(--ok); background: color-mix(in srgb, var(--ok) 15%, transparent); }
   .b-failed { color: var(--danger); background: color-mix(in srgb, var(--danger) 14%, transparent); }
   .b-running, .b-queued { color: var(--accent); background: var(--accent-soft); }
+  /* Ne yeşil ne kırmızı: tarama olmadı, ama kimse bir şeyi yanlış yapmadı. */
+  .b-scanner_unavailable {
+    color: var(--muted); background: color-mix(in srgb, var(--muted) 14%, transparent);
+  }
   .scan-item.s-failed { border-left: 3px solid var(--danger); }
+  .scan-item.s-scanner_unavailable { border-left: 3px solid var(--line); }
 
   /* --- Pentest --------------------------------------------------------------
      Bir süreç ekranı: kapsam, ilerleme, bulgular. Tarayıcı sayfalarından

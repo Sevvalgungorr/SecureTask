@@ -103,6 +103,15 @@ class FindingResponse(FindingCreate):
     evidence: str | None = None
     evidence_start: int | None = None
     evidence_line: int | None = None
+    # What one scanner reported that has no field of its own — the package and
+    # fixed version behind a dependency vulnerability, the rule and type behind
+    # a leaked credential. Read-only for the same reason `source` is: a client
+    # does not get to claim a scanner said something.
+    #
+    # For a secret finding there is no key here holding the credential, and no
+    # code that would add one. What the scanner found is described; it is not
+    # carried.
+    details: dict | None = None
     # Who accepted the risk and when. Set by the server from the session that
     # cleared step-up; a client cannot name someone else as the approver.
     accepted_at: datetime | None = None

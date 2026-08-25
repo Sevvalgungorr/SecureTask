@@ -8,6 +8,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    JSON,
     Numeric,
     String,
     UniqueConstraint,
@@ -170,10 +171,25 @@ class Finding(Base):
     # It can contain the very thing the rule flagged — a hardcoded-secret
     # finding quotes the secret. That is why it inherits the finding's access
     # control rather than living anywhere more public, and why it is capped.
+    #
+    # For a secret-scanning finding the snippet is **masked before it is ever
+    # built**, in the parser, so what lands here is `API_KEY = "ghp_****"` and
+    # the real value exists nowhere in this process after the scanner's output
+    # is read. See app/importers.py: parse_gitleaks.
     evidence = Column(String(4000))
     # Where the snippet starts, and which line inside it is the finding.
     evidence_start = Column(Integer)
     evidence_line = Column(Integer)
+    # What a particular scanner reported that has no column of its own: the
+    # package and fixed version for a dependency vulnerability, the rule and
+    # secret *type* for a leaked credential.
+    #
+    # One JSON column rather than six nullable ones that are empty for every
+    # other kind of finding. It is read-only from outside — nothing in a
+    # request writes here, only an importer — so it holds what a scanner said
+    # and not what a caller claimed. A real secret is never one of the values;
+    # that is guaranteed where the dict is built, not here.
+    details = Column(JSON)
 
     # What the source last rated this, as opposed to what the row now says.
     # Keeping the two apart is what lets a re-run tell "the evidence got worse"
@@ -321,13 +337,24 @@ class ScanRun(Base):
     # The project's registered *name*, not its path. A path in a row invites a
     # later feature to read it back out of the database and use it.
     project = Column(String(80), nullable=False)
-    # "sast" | "dast". One table for both because a run is a run — who started
-    # it, over what, with what outcome. The kind matters for what the row
-    # *means* (a directory or a running system), not for how it is kept.
+    # "sast" | "sca" | "secret" | "dast". One table for all four because a run
+    # is a run — who started it, over what, with what outcome. The kind matters
+    # for what the row *means* (a directory, a manifest, a running system), not
+    # for how it is kept.
     kind = Column(String(10), nullable=False, server_default="sast")
     scanner = Column(String(30), nullable=False, server_default="bandit")
-    # queued → running → completed | failed
+    # queued → running → completed | failed | scanner_unavailable
+    #
+    # The last one is its own outcome rather than a kind of failure: "gitleaks
+    # is not installed on this machine" is a thing the operator can fix in a
+    # minute, and burying it in the same red box as "the scanner crashed"
+    # makes them go looking for the wrong problem.
     status = Column(String(20), nullable=False, server_default="queued")
+    # Something true about the run that is not an error: how many requirement
+    # lines were skipped because they were not pinned, for instance. A scan
+    # that quietly examined less than the operator thinks it did is worse than
+    # one that failed.
+    note = Column(String(200), nullable=False, server_default="")
     started_at = Column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
